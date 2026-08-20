@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertOctagon, Check, ChevronRight, Cpu, ExternalLink, LockKeyhole, Power, RotateCcw, Siren, Volume2, Wifi } from 'lucide-react';
 import { useSentinel } from '@/hooks/use-sentinel';
 import { PageIntro, Panel, ScenarioControls } from '@/components/sentinel-shell';
+import { sendHardwareCommand, type HardwareCommand } from '@/services/hardwareService';
 
 export default function Hardware() {
   const { state } = useSentinel();
@@ -13,7 +14,12 @@ export default function Hardware() {
     { device: 'ESP32 Relay Bus', category: 'Exit actuators', status: 'online', latency: 18, state: 'ARMED', message: '4 relay channels · heartbeat 2s', icon: Power },
     { device: 'Thermal Array / 6', category: 'Environmental sensors', status: 'online', latency: 26, state: 'SYNCED', message: 'Ambient + concentration signals', icon: Siren },
   ];
-  const dangerous = (id: string) => { setConfirming(null); setOverride(id); };
+  const dangerous = (id: string) => {
+    setConfirming(null);
+    setOverride(id);
+    const commandById: Record<string, HardwareCommand> = { robot: 'STOP_ACTUATORS', audio: 'EMERGENCY', lights: 'NORMAL' };
+    void sendHardwareCommand(commandById[id]);
+  };
   return <div className="enter-rise">
     <PageIntro eyebrow="04 / FIELD SYSTEMS" title="Hardware" description="Monitor edge devices and issue deliberate manual overrides. Dangerous actions require a second confirmation so the operator stays in the loop." action={<div className="flex items-center gap-2 border border-secondary/25 bg-secondary/5 px-3 py-2"><span className="status-pulse h-2 w-2 rounded-full bg-secondary" /><span className="data-mono text-[9px] uppercase tracking-[.12em] text-secondary">All critical links healthy</span></div>} />
     <ScenarioControls />

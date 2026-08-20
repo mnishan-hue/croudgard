@@ -15,6 +15,7 @@ export default function LiveControl() {
   return <div className="enter-rise">
     <PageIntro eyebrow="01 / COMMAND SURFACE" title="Live Control" description="One view for the crowd signal, the decision, and the response. This console is running a local simulation against the Harbor Arena gate complex." action={<div className="flex items-center gap-2 border border-secondary/25 bg-secondary/5 px-3 py-2"><span className="status-pulse h-2 w-2 rounded-full bg-secondary" /><span className="data-mono text-[9px] uppercase tracking-[.12em] text-secondary">Telemetry connected</span></div>} />
     <ScenarioControls />
+    <IncidentBrief state={state} />
     <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <MetricCard label="Crowd risk index" value={`${state.analysis.risk}`} unit="/ 100" note={state.analysis.state} tone={critical ? 'danger' : state.analysis.risk > 55 ? 'amber' : 'teal'} icon={Gauge} progress={state.analysis.risk} />
       <MetricCard label="People in field" value={String(state.preset.people)} unit="tracks" note="anonymous · live" tone="teal" progress={Math.min(100, state.preset.people / 5)} />
@@ -43,6 +44,16 @@ export default function LiveControl() {
     </div>
     <div className={`mt-5 flex items-center gap-3 border p-3 ${critical ? 'border-destructive/50 bg-destructive/10' : 'border-secondary/25 bg-secondary/5'}`}><CircleAlert size={16} className={critical ? 'text-destructive' : 'text-secondary'} /><p className="text-[11px] text-muted-foreground"><span className="font-semibold text-foreground">{critical ? 'Critical crowd state requires operator confirmation.' : 'Operator note.'}</span> {critical ? 'Emergency response is staged. Verify physical egress before escalating.' : 'All actions shown are simulated locally and ready for FastAPI/WebSocket replacement.'}</p><ArrowRight size={15} className="ml-auto text-muted-foreground" /></div>
   </div>;
+}
+
+function IncidentBrief({ state }: { state: ReturnType<typeof useSentinel>['state'] }) {
+  const active = state.analysis.risk > 55;
+  const critical = state.analysis.risk > 85;
+  const affected = state.predictions.reduce((worst, item) => item.risk > worst.risk ? item : worst, state.predictions[0]);
+  return <section className={`mb-5 grid gap-4 border p-4 sm:grid-cols-[1fr_auto] sm:items-center ${critical ? 'border-destructive/60 bg-destructive/10' : active ? 'border-primary/45 bg-primary/[.06]' : 'border-secondary/35 bg-secondary/[.05]'}`}>
+    <div className="flex items-start gap-3"><div className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center border ${critical ? 'border-destructive/60 text-destructive' : active ? 'border-primary/50 text-primary' : 'border-secondary/50 text-secondary'}`}><CircleAlert size={16} /></div><div><div className="data-mono text-[9px] uppercase tracking-[.16em] text-muted-foreground">Operator brief · {state.system.systemState}</div><div className="mt-1 text-[14px] font-semibold">{active ? `${affected.zone} requires attention` : 'Crowd flow is within normal limits'}</div><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{active ? `${affected.zone} is at ${affected.risk}% risk. ${state.preset.decision}.` : 'No intervention is required. Continue monitoring live density and movement speed.'}</p></div></div>
+    <div className="border-l border-border pl-4 sm:min-w-[180px]"><div className="data-mono text-[8px] uppercase tracking-[.14em] text-muted-foreground">Next action</div><div className={`mt-1 text-[12px] font-semibold ${critical ? 'text-destructive' : active ? 'text-primary' : 'text-secondary'}`}>{active ? state.robot.display : 'Maintain monitoring'}</div><div className="data-mono mt-1 text-[9px] text-muted-foreground">CONFIDENCE {state.analysis.confidence}%</div></div>
+  </section>;
 }
 
 function MetricCard({ label, value, unit, note, tone, icon: Icon, progress }: { label: string; value: string; unit: string; note: string; tone: 'danger' | 'amber' | 'teal'; icon?: typeof Gauge; progress?: number }) {

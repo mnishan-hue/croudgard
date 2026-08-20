@@ -3,6 +3,7 @@ import { Link, useLocation } from 'wouter';
 import { Activity, AlertTriangle, Aperture, Bot, Camera, ChevronDown, Cpu, FileClock, LayoutDashboard, Menu, RadioTower, ShieldCheck, Thermometer, X } from 'lucide-react';
 import { scenarios, type Scenario, type Severity } from '@/lib/sentinel';
 import { useSentinel } from '@/hooks/use-sentinel';
+import { serviceConfig } from '@/services/config';
 
 const nav = [
   { href: '/', label: 'Live Control', icon: LayoutDashboard },
@@ -45,6 +46,7 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3"><button className="text-muted-foreground lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu size={20} /></button><div><div className="data-mono text-[9px] uppercase tracking-[.2em] text-muted-foreground">LOCAL OPERATIONS CONTROL</div><div className="mt-1 text-[13px] font-semibold text-foreground">{location === '/' ? 'Live Control' : nav.find((item) => item.href === location)?.label ?? 'Operations'}</div></div></div>
           <div className="flex items-center gap-2 sm:gap-5">
             <div className="hidden items-center gap-3 xl:flex">
+              <HeaderStatus label="Data source" value={serviceConfig.useMockData ? 'MOCK MODE' : 'LIVE BACKEND'} tone={serviceConfig.useMockData ? 'amber' : 'teal'} />
               <HeaderStatus label="AI engine" value={state.system.aiEngine} tone="teal" />
               <HeaderStatus label="ESP32 relay" value={state.system.esp32} tone="teal" />
               <HeaderStatus label="Emergency" value={state.system.emergencyStatus} tone={state.system.emergencyStatus === 'CLEAR' ? 'teal' : 'red'} />
@@ -59,10 +61,10 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function HeaderStatus({ label, value, tone }: { label: string; value: string; tone: 'teal' | 'red' }) {
+function HeaderStatus({ label, value, tone }: { label: string; value: string; tone: 'teal' | 'red' | 'amber' }) {
   return <div className="flex items-center gap-2">
-    <span className={`h-1.5 w-1.5 rounded-full ${tone === 'red' ? 'bg-destructive status-pulse' : 'bg-secondary'}`} />
-    <div><div className="data-mono text-[8px] uppercase tracking-[.12em] text-muted-foreground">{label}</div><div className={`data-mono mt-0.5 text-[9px] ${tone === 'red' ? 'text-destructive' : 'text-secondary'}`}>{value}</div></div>
+    <span className={`h-1.5 w-1.5 rounded-full ${tone === 'red' ? 'bg-destructive status-pulse' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} />
+    <div><div className="data-mono text-[8px] uppercase tracking-[.12em] text-muted-foreground">{label}</div><div className={`data-mono mt-0.5 text-[9px] ${tone === 'red' ? 'text-destructive' : tone === 'amber' ? 'text-primary' : 'text-secondary'}`}>{value}</div></div>
   </div>;
 }
 
