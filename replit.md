@@ -1,6 +1,6 @@
-# [Project name]
+# CrowdGuard Sentinel
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+CrowdGuard Sentinel is a frontend-only emergency operations console for visualising crowd risk, AI explanations, safe-exit guidance, and robot hardware response in a local demo mode.
 
 ## Run & Operate
 
@@ -22,15 +22,22 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/crowdguard-sentinel/src/pages/` — Live Control, Camera Analysis, AI Intelligence, Hardware, and Event Log screens
+- `artifacts/crowdguard-sentinel/src/lib/sentinel.ts` — typed scenario presets and mock state generator
+- `artifacts/crowdguard-sentinel/src/services/` — API, WebSocket, camera, crowd, and hardware seams for the future FastAPI backend
+- `artifacts/crowdguard-sentinel/src/data/mockData.ts` — mock snapshot adapter
+- `artifacts/crowdguard-sentinel/src/components/` — shared control-room shell and visual components
+- `artifacts/crowdguard-sentinel/src/index.css` — control-room theme tokens and motion
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The first build is intentionally frontend-only; mock scenarios are the source of truth until the FastAPI/WebSocket service is available.
+- The UI models anonymous crowd tracks and aggregate movement signals only; it does not perform face identification.
+- Demo scenarios change the complete operational story, not just one number: risks, decisions, map state, robot response, charts, and events.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Operators can inspect live crowd risk, camera analysis, explainable AI signals, thermal inputs, hardware health, event history, and manual override states. Demo Controls make the full Detect → Respond → Verify Improvement narrative available without a backend.
 
 ## User preferences
 
