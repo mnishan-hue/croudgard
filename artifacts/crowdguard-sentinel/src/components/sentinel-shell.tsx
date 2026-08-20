@@ -43,12 +43,27 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
       <div className="lg:pl-[246px]">
         <header className="sticky top-0 z-30 flex h-[76px] items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur-md sm:px-7">
           <div className="flex items-center gap-3"><button className="text-muted-foreground lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu size={20} /></button><div><div className="data-mono text-[9px] uppercase tracking-[.2em] text-muted-foreground">LOCAL OPERATIONS CONTROL</div><div className="mt-1 text-[13px] font-semibold text-foreground">{location === '/' ? 'Live Control' : nav.find((item) => item.href === location)?.label ?? 'Operations'}</div></div></div>
-          <div className="flex items-center gap-3 sm:gap-6"><div className="hidden items-center gap-2 text-right sm:flex"><span className="data-mono text-[10px] text-muted-foreground">{state.system.timestamp} UTC</span><span className="h-1.5 w-1.5 rounded-full bg-secondary status-pulse" /></div><div className="flex items-center gap-2 border-l border-border pl-3 sm:pl-5"><span className="grid h-7 w-7 place-items-center rounded-full border border-secondary/40 bg-secondary/10 text-[10px] font-bold text-secondary">OP</span><span className="hidden text-[11px] font-medium sm:block">Operator / 04</span></div></div>
+          <div className="flex items-center gap-2 sm:gap-5">
+            <div className="hidden items-center gap-3 xl:flex">
+              <HeaderStatus label="AI engine" value={state.system.aiEngine} tone="teal" />
+              <HeaderStatus label="ESP32 relay" value={state.system.esp32} tone="teal" />
+              <HeaderStatus label="Emergency" value={state.system.emergencyStatus} tone={state.system.emergencyStatus === 'CLEAR' ? 'teal' : 'red'} />
+            </div>
+            <div className="hidden items-center gap-2 border-l border-border pl-3 text-right sm:flex sm:pl-5"><span className="data-mono text-[10px] text-muted-foreground">{state.system.timestamp} UTC</span><span className="h-1.5 w-1.5 rounded-full bg-secondary status-pulse" /></div>
+            <div className="flex items-center gap-2 border-l border-border pl-3 sm:pl-5"><span className="grid h-7 w-7 place-items-center rounded-full border border-secondary/40 bg-secondary/10 text-[10px] font-bold text-secondary">OP</span><span className="hidden text-[11px] font-medium sm:block">Operator / 04</span></div>
+          </div>
         </header>
         <main className="mx-auto max-w-[1600px] px-4 py-5 sm:px-7 sm:py-7">{children}</main>
       </div>
     </div>
   );
+}
+
+function HeaderStatus({ label, value, tone }: { label: string; value: string; tone: 'teal' | 'red' }) {
+  return <div className="flex items-center gap-2">
+    <span className={`h-1.5 w-1.5 rounded-full ${tone === 'red' ? 'bg-destructive status-pulse' : 'bg-secondary'}`} />
+    <div><div className="data-mono text-[8px] uppercase tracking-[.12em] text-muted-foreground">{label}</div><div className={`data-mono mt-0.5 text-[9px] ${tone === 'red' ? 'text-destructive' : 'text-secondary'}`}>{value}</div></div>
+  </div>;
 }
 
 export function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
@@ -57,7 +72,7 @@ export function PageIntro({ eyebrow, title, description, action }: { eyebrow: st
 
 export function ScenarioControls() {
   const { scenario, setScenario } = useSentinel();
-  return <section className="panel mb-6 flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4"><div className="flex items-center gap-3"><div className="grid h-8 w-8 place-items-center border border-primary/40 bg-primary/10 text-primary"><Aperture size={15} /></div><div><div className="text-[11px] font-semibold">Demo Controls</div><div className="data-mono text-[9px] text-muted-foreground">SIMULATION STATE · LOCAL ONLY</div></div></div><div className="flex flex-wrap gap-1.5">{scenarios.map((item) => <button key={item.id} onClick={() => setScenario(item.id)} className={`border px-2.5 py-2 text-left transition-colors ${scenario === item.id ? 'border-primary/70 bg-primary/15 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}`} data-testid={`button-scenario-${item.id}`}><span className="block text-[10px] font-semibold">{item.label}</span><span className="data-mono mt-0.5 block text-[8px] opacity-65">{item.short}</span></button>)}</div></section>;
+  return <section className="panel mb-6 flex flex-col gap-4 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4"><div className="flex items-center gap-3"><div className="grid h-8 w-8 place-items-center border border-primary/40 bg-primary/10 text-primary"><Aperture size={15} /></div><div><div className="text-[11px] font-semibold">Demo Controls</div><div className="data-mono text-[9px] text-muted-foreground">SIMULATION STATE · LOCAL ONLY</div></div></div><div className="flex min-w-0 flex-1 flex-wrap justify-start gap-1.5 sm:justify-end">{scenarios.map((item) => <button key={item.id} onClick={() => setScenario(item.id)} className={`min-w-[104px] border px-2.5 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${scenario === item.id ? 'border-primary/70 bg-primary/15 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/35 hover:bg-muted'}`} data-testid={`button-scenario-${item.id}`} aria-pressed={scenario === item.id}><span className="block text-[10px] font-semibold">{item.label}</span><span className="data-mono mt-0.5 block text-[8px] opacity-65">{item.short}</span></button>)}</div></section>;
 }
 
 export function Panel({ title, eyebrow, children, className = '', action }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {

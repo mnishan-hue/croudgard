@@ -92,6 +92,10 @@ body {
 }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
 ::selection { background: hsl(var(--primary) / .24); color: hsl(var(--foreground)); }
 
 .grid-surface {
@@ -106,9 +110,14 @@ button { cursor: pointer; }
 .scanline { background: repeating-linear-gradient(0deg, transparent 0, transparent 4px, hsl(185 66% 43% / .025) 5px); }
 .data-mono { font-family: var(--app-font-mono); letter-spacing: -.02em; }
 .panel {
-  background: linear-gradient(145deg, hsl(218 30% 13% / .96), hsl(218 31% 10% / .96));
+  background: hsl(218 30% 12% / .98);
   border: 1px solid hsl(var(--border));
-  box-shadow: 0 12px 28px hsl(220 33% 3% / .16);
+  box-shadow: 0 8px 20px hsl(220 33% 3% / .18);
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+.panel:hover {
+  border-color: hsl(215 24% 27%);
+  box-shadow: 0 10px 24px hsl(220 33% 3% / .24);
 }
 .status-pulse { animation: status-pulse 2.2s ease-in-out infinite; }
 .signal-flow { animation: signal-flow 1.8s ease-in-out infinite; }

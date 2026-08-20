@@ -16,9 +16,9 @@ export default function LiveControl() {
     <PageIntro eyebrow="01 / COMMAND SURFACE" title="Live Control" description="One view for the crowd signal, the decision, and the response. This console is running a local simulation against the Harbor Arena gate complex." action={<div className="flex items-center gap-2 border border-secondary/25 bg-secondary/5 px-3 py-2"><span className="status-pulse h-2 w-2 rounded-full bg-secondary" /><span className="data-mono text-[9px] uppercase tracking-[.12em] text-secondary">Telemetry connected</span></div>} />
     <ScenarioControls />
     <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricCard label="Crowd risk index" value={`${state.analysis.risk}`} unit="/ 100" note={state.analysis.state} tone={critical ? 'danger' : state.analysis.risk > 55 ? 'amber' : 'teal'} icon={Gauge} />
-      <MetricCard label="People in field" value={String(state.preset.people)} unit="tracks" note="anonymous · live" tone="teal" icon={Users} />
-      <MetricCard label="Recommended exit" value={state.predictions[0].recommendedExit} unit="ROUTE" note={state.preset.decision} tone="amber" icon={Route} />
+      <MetricCard label="Crowd risk index" value={`${state.analysis.risk}`} unit="/ 100" note={state.analysis.state} tone={critical ? 'danger' : state.analysis.risk > 55 ? 'amber' : 'teal'} icon={Gauge} progress={state.analysis.risk} />
+      <MetricCard label="People in field" value={String(state.preset.people)} unit="tracks" note="anonymous · live" tone="teal" progress={Math.min(100, state.preset.people / 5)} />
+      <MetricCard label="Recommended exit" value={state.predictions[0].recommendedExit} unit="ROUTE" note={state.preset.decision} tone="amber" />
       <MetricCard label="Robot response" value={armed ? 'ENGAGED' : 'PAUSED'} unit="R-04" note={armed ? state.robot.display : 'Manual pause active'} tone={armed ? 'teal' : 'danger'} icon={Bot} />
     </div>
     <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
@@ -45,9 +45,9 @@ export default function LiveControl() {
   </div>;
 }
 
-function MetricCard({ label, value, unit, note, tone, icon: Icon }: { label: string; value: string; unit: string; note: string; tone: 'danger' | 'amber' | 'teal'; icon: typeof Gauge }) {
+function MetricCard({ label, value, unit, note, tone, icon: Icon, progress }: { label: string; value: string; unit: string; note: string; tone: 'danger' | 'amber' | 'teal'; icon?: typeof Gauge; progress?: number }) {
   const color = tone === 'danger' ? 'text-destructive' : tone === 'amber' ? 'text-primary' : 'text-secondary';
-  return <div className="panel p-4"><div className="flex items-start justify-between"><span className="data-mono text-[9px] uppercase tracking-[.13em] text-muted-foreground">{label}</span><Icon size={16} className={color} /></div><div className="mt-3 flex items-baseline gap-2"><span className={`data-mono text-[28px] font-semibold ${color}`}>{value}</span><span className="data-mono text-[9px] text-muted-foreground">{unit}</span></div><div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground"><span className={`h-1.5 w-1.5 rounded-full ${tone === 'danger' ? 'bg-destructive' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} />{note}</div></div>;
+  return <div className="panel p-4"><div className="flex items-start justify-between"><span className="data-mono text-[9px] uppercase tracking-[.13em] text-muted-foreground">{label}</span>{Icon && <Icon size={16} className={color} />}</div><div className="mt-3 flex items-baseline gap-2"><span className={`data-mono text-[28px] font-semibold ${color}`}>{value}</span><span className="data-mono text-[9px] text-muted-foreground">{unit}</span></div>{progress !== undefined && <div className="mt-3 h-1 overflow-hidden bg-muted"><div className={`h-full ${tone === 'danger' ? 'bg-destructive' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} /></div>}<div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground"><span className={`h-1.5 w-1.5 rounded-full ${tone === 'danger' ? 'bg-destructive' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} />{note}</div></div>;
 }
 function TraceRow({ step, label, value, tone, last = false }: { step: string; label: string; value: string; tone: 'danger' | 'amber' | 'teal'; last?: boolean }) {
   const color = tone === 'danger' ? 'text-destructive' : tone === 'amber' ? 'text-primary' : 'text-secondary';
