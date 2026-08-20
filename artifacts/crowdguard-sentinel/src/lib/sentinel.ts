@@ -14,7 +14,7 @@ export interface ZoneMetrics {
 }
 export interface CrowdAnalysis {
   state: string; risk: number; confidence: number; rippleDetected: boolean; rippleStrength: number;
-  propagation: string; thermal: number; ambient: number; humidity: number;
+  propagation: string;
 }
 export interface RiskPrediction {
   zone: string; risk: number; label: string; trend: string; recommendedExit: string; intervention: string;
@@ -63,7 +63,7 @@ export function getMockState(scenario: Scenario) {
     { zone: 'Central Plaza', risk: Math.round((p.a + p.b) / 2), density: Math.round((p.a + p.b) / 2), speed: Math.max(.5, 1.6 - p.risk / 100), queueGrowth: p.ripple ? 4.2 : .4, inflow: 48, outflow: 43, stoppedPeople: Math.round(p.risk * .7), directionConflict: p.ripple ? 67 : 8 },
     { zone: 'Exit B', risk: p.b, density: p.b, speed: Math.max(0.5, 1.9 - p.b / 72), queueGrowth: p.b > 70 ? 3.4 : p.b > 45 ? 1.1 : -.2, inflow: Math.round(28 + p.b / 2), outflow: Math.round(41 - p.b / 4), stoppedPeople: Math.round(p.b * 1.1), directionConflict: p.ripple ? 41 : p.b > 70 ? 24 : 4 },
   ];
-  const analysis: CrowdAnalysis = { state: p.state, risk: p.risk, confidence: p.ripple ? 91 : 96, rippleDetected: p.ripple, rippleStrength: p.ripple ? (scenario === 'critical' ? 89 : 64) : 0, propagation: p.ripple ? 'South-east · 1.8 m/s' : 'None detected', thermal: scenario === 'critical' ? 41.8 : 34.6 + p.risk / 100, ambient: 22.4, humidity: 48 };
+  const analysis: CrowdAnalysis = { state: p.state, risk: p.risk, confidence: p.ripple ? 91 : 96, rippleDetected: p.ripple, rippleStrength: p.ripple ? (scenario === 'critical' ? 89 : 64) : 0, propagation: p.ripple ? 'South-east · 1.8 m/s' : 'None detected' };
   const predictions: RiskPrediction[] = [
     { zone: 'Exit A', risk: p.a, label: p.a > 75 ? 'High congestion' : p.a > 45 ? 'Watch' : 'Normal', trend: p.a > 50 ? '↑' : '→', recommendedExit: p.a > p.b ? 'Exit B' : 'Exit A', intervention: p.a > p.b ? 'Robot diversion' : 'No action' },
     { zone: 'Exit B', risk: p.b, label: p.b > 75 ? 'High congestion' : p.b > 45 ? 'Watch' : 'Normal', trend: p.b > 50 ? '↑' : '→', recommendedExit: p.b > p.a ? 'Exit A' : 'Exit B', intervention: p.b > p.a ? 'Robot diversion' : 'No action' },
@@ -74,13 +74,12 @@ export function getMockState(scenario: Scenario) {
     { timestamp: '14:32:08', category: 'AI', severity: p.risk > 75 ? 'urgent' : 'info', message: p.ripple ? 'Directional ripple detected in central plaza' : 'Crowd state model refreshed · confidence ' + analysis.confidence + '%' },
     { timestamp: '14:31:54', category: 'ROBOT', severity: p.risk > 60 ? 'watch' : 'info', message: p.risk > 60 ? 'Guidance route published to mobile unit R-04' : 'Mobile unit R-04 heartbeat nominal' },
     { timestamp: '14:31:21', category: 'CAMERA', severity: 'info', message: 'All edge inference streams reporting within SLA' },
-    { timestamp: '14:30:47', category: 'SENSOR', severity: 'info', message: 'Thermal cluster baseline updated from 6 nodes' },
+    { timestamp: '14:30:47', category: 'SENSOR', severity: 'info', message: 'Crowd-flow sensor baseline updated from 6 nodes' },
   ];
   const explanations: AIExplanation[] = [
     { signal: 'Occupancy density', value: String(Math.round((p.a + p.b) / 2)), unit: '%', status: p.risk > 70 ? 'elevated' : 'nominal', contribution: 38, tooltip: 'Anonymous person tracks per square metre' },
     { signal: 'Flow velocity', value: (1.8 - p.risk / 90).toFixed(1), unit: 'm/s', status: p.risk > 70 ? 'slowing' : 'nominal', contribution: 24, tooltip: 'Median movement speed across tracked vectors' },
     { signal: 'Direction conflict', value: String(p.ripple ? 67 : Math.round(p.risk / 4)), unit: '%', status: p.ripple ? 'elevated' : 'nominal', contribution: p.ripple ? 30 : 12, tooltip: 'Opposing trajectories crossing the decision zone' },
-    { signal: 'Thermal concentration', value: analysis.thermal.toFixed(1), unit: '°C', status: p.risk > 85 ? 'elevated' : 'nominal', contribution: 8, tooltip: 'Average thermal sensor reading in dense clusters' },
   ];
   return { preset: p, cameras, zones, analysis, predictions, robot, events, explanations, system: { timestamp: now(), systemState: p.risk > 85 ? 'INTERVENTION' : p.risk > 60 ? 'ADVISORY' : 'NOMINAL', aiEngine: 'ONLINE · 42ms', esp32: 'ONLINE · 18ms', emergencyStatus: p.risk > 85 ? 'RESPONSE ACTIVE' : 'CLEAR' } as SystemStatus };
 }

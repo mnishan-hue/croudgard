@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, AlertTriangle, Aperture, Bot, Camera, ChevronDown, Cpu, FileClock, LayoutDashboard, Menu, RadioTower, ShieldCheck, Thermometer, X } from 'lucide-react';
+import { Activity, AlertTriangle, Aperture, Bot, Camera, ChevronDown, Cpu, FileClock, LayoutDashboard, Menu, RadioTower, ShieldCheck, X } from 'lucide-react';
 import { scenarios, type Scenario, type Severity } from '@/lib/sentinel';
 import { useSentinel } from '@/hooks/use-sentinel';
 import { serviceConfig } from '@/services/config';
@@ -36,7 +36,6 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
           {nav.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`group flex items-center gap-3 border-l-2 px-3 py-2.5 text-[12px] font-medium transition-colors ${location === href ? 'border-primary bg-primary/10 text-primary' : 'border-transparent text-sidebar-foreground/65 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-foreground'}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`}><Icon size={16} strokeWidth={1.8} /><span>{label}</span>{label === 'Event Log' && <span className="data-mono ml-auto rounded-sm bg-destructive/15 px-1.5 py-0.5 text-[9px] text-destructive">5</span>}</Link>)}
           <p className="data-mono mb-3 mt-8 px-3 text-[9px] uppercase tracking-[.18em] text-muted-foreground">System</p>
           <div className="flex items-center gap-3 px-3 py-2 text-[11px] text-sidebar-foreground/65"><RadioTower size={15} className="text-secondary" /> <span>Live telemetry</span><span className="status-pulse ml-auto h-1.5 w-1.5 rounded-full bg-secondary" /></div>
-          <div className="flex items-center gap-3 px-3 py-2 text-[11px] text-sidebar-foreground/65"><Thermometer size={15} className="text-primary" /> <span>6 thermal nodes</span><span className="data-mono ml-auto text-[9px]">OK</span></div>
         </nav>
         <div className="border-t border-sidebar-border p-4"><div className="flex items-center gap-2 text-[10px] text-muted-foreground"><span className={`h-2 w-2 rounded-full ${state.system.emergencyStatus === 'CLEAR' ? 'bg-secondary' : 'bg-destructive status-pulse'}`} /> <span className="data-mono uppercase tracking-[.14em]">{state.system.emergencyStatus === 'CLEAR' ? 'No active emergency' : state.system.emergencyStatus}</span></div><div className="data-mono mt-3 text-[9px] text-muted-foreground/60">BUILD 0.9.7 · LOCAL DEMO</div></div>
       </aside>

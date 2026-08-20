@@ -12,7 +12,6 @@ export default function Hardware() {
     { device: 'CrowdGuard Edge Node 01', category: 'Inference gateway', status: 'online', latency: 42, state: 'PROCESSING', message: '3 camera streams · 18.2 GB free', icon: Cpu },
     { device: 'Mobile Unit R-04', category: 'Guidance robot', status: state.robot.arm === 'ACTIVE' ? 'online' : 'warning', latency: 84, state: state.robot.arm, message: state.robot.display, icon: Wifi },
     { device: 'ESP32 Relay Bus', category: 'Exit actuators', status: 'online', latency: 18, state: 'ARMED', message: '4 relay channels · heartbeat 2s', icon: Power },
-    { device: 'Thermal Array / 6', category: 'Environmental sensors', status: 'online', latency: 26, state: 'SYNCED', message: 'Ambient + concentration signals', icon: Siren },
   ];
   const dangerous = (id: string) => {
     setConfirming(null);
