@@ -7,6 +7,7 @@ CrowdGuard Sentinel is a frontend-only emergency operations console for visualis
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/crowdguard-sentinel run build` — build the static frontend bundle for Vercel
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
@@ -50,3 +51,4 @@ _Populate as you build — sharp edges, "always run X before Y" rules._
 ## Pointers
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- `vercel.json` — Vercel install, build, static output, and SPA fallback configuration
