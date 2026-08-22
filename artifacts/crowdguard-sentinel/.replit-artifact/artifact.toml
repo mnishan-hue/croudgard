@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "CrowdGuard Sentinel"
+description = "A serious smart-city control centre for monitoring crowd flow, reviewing AI risk signals, guiding people toward safer exits, and supervising connected CrowdGuard hardware in demonstration mode."
+version = "1.0.0"
+id = "artifacts/crowdguard-sentinel"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18215
+
+[services.development]
+run = "pnpm --filter @workspace/crowdguard-sentinel run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/crowdguard-sentinel", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/crowdguard-sentinel/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18215"
+BASE_PATH = "/"

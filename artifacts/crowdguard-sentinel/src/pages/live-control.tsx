@@ -1,0 +1,68 @@
+import { useMemo, useState } from 'react';
+import { ArrowRight, Bot, CircleAlert, Gauge, Radio, Route, ShieldCheck, Siren, TrendingUp, Users } from 'lucide-react';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useSentinel } from '@/hooks/use-sentinel';
+import { MapPanel, PageIntro, Panel, ScenarioControls } from '@/components/sentinel-shell';
+import { apiFetch } from '@/services/api';
+import type { BackendSnapshot } from '@/types/sentinel';
+
+const chartSeed = [28, 31, 35, 33, 39, 46, 52, 60, 66, 71, 69, 65, 62];
+function chartData(risk: number) { return chartSeed.map((value, index) => ({ time: `${14}:${20 + index}`, risk: Math.max(8, Math.min(98, value + (risk - 55) * .35 + (index > 8 ? (risk - 55) * .22 : 0))) })); }
+
+export default function LiveControl() {
+  const { state, snapshot, connection, refresh } = useSentinel();
+  const [armed, setArmed] = useState(true);
+  const data = useMemo(() => snapshot?.risk_history.map((risk,index)=>({time:String(index+1),risk})) ?? chartData(state.analysis.risk), [snapshot, state.analysis.risk]);
+  const critical = state.analysis.risk > 85;
+  return <div className="enter-rise">
+    <PageIntro eyebrow="01 / COMMAND SURFACE" title="Live Control" description={`One view for the crowd signal, decision, response, and closed-loop result at ${snapshot?.facility.name??'the configured facility'}. All current AI values are simulated.`} action={<div className={`flex items-center gap-2 border px-3 py-2 ${connection==='open'?'border-secondary/25 bg-secondary/5 text-secondary':'border-primary/30 bg-primary/5 text-primary'}`}><span className={`h-2 w-2 rounded-full ${connection==='open'?'status-pulse bg-secondary':'bg-primary'}`} /><span className="data-mono text-[9px] uppercase tracking-[.12em]">{connection==='open'?'Backend + WebSocket connected':'WebSocket reconnecting'}</span></div>} />
+    <ScenarioControls />
+    <IncidentBrief state={state} />
+    <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <MetricCard label="Crowd risk index" value={`${state.analysis.risk}`} unit="/ 100" note={state.analysis.state} tone={critical ? 'danger' : state.analysis.risk > 55 ? 'amber' : 'teal'} icon={Gauge} progress={state.analysis.risk} />
+      <MetricCard label="People in field" value={String(state.preset.people)} unit="tracks" note="anonymous · live" tone="teal" progress={Math.min(100, state.preset.people / 5)} />
+      <MetricCard label="Recommended exit" value={state.predictions[0].recommendedExit} unit="ROUTE" note={state.preset.decision} tone="amber" />
+      <MetricCard label="Sentinel response" value={armed ? 'ENGAGED' : 'PAUSED'} unit="STATIONARY" note={armed ? state.robot.display : 'Manual pause active'} tone={armed ? 'teal' : 'danger'} icon={Bot} />
+    </div>
+    <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+      <Panel title="Live venue map" eyebrow="SPATIAL MODEL / 3 SEC REFRESH" action={<span className="data-mono text-[9px] text-muted-foreground">N 37° · W 122°</span>}><MapPanel /></Panel>
+      <Panel title="Decision trace" eyebrow="CROWDGUARD AI / EXPLAINABLE">
+        <div className="space-y-0 p-4">
+          <TraceRow step="01" label="Pattern detected" value={state.analysis.state} tone={critical || state.analysis.rippleDetected ? 'danger' : 'amber'} />
+          <TraceRow step="02" label="Risk assessed" value={`${state.analysis.risk} / 100 · ${state.analysis.confidence}% confidence`} tone={state.analysis.risk > 60 ? 'danger' : 'teal'} />
+          <TraceRow step="03" label="Decision issued" value={state.preset.decision} tone="amber" />
+          <TraceRow step="04" label="Response sent" value={state.robot.display} tone="teal" last />
+          <div className="mt-5 border border-border bg-muted/35 p-3"><div className="flex items-center gap-2 text-[10px] font-semibold"><ShieldCheck size={14} className="text-secondary" />Why this decision?</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{snapshot?.decision.reason??'Waiting for the decision engine.'}</p>{snapshot?.decision.exit_ranking.map((item,index)=><div key={item.exit_id} className="mt-2 flex justify-between data-mono text-[8px] text-muted-foreground"><span>#{index+1} {item.name}</span><span>SAFETY SCORE {item.score}</span></div>)}</div>
+        </div>
+      </Panel>
+    </div>
+    <div className="mt-5 grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+      <Panel title="Risk trajectory" eyebrow="LAST 13 MINUTES" action={<div className="flex items-center gap-1 text-[10px] text-primary"><TrendingUp size={13} /> {state.analysis.risk > 50 ? 'elevated' : 'stable'}</div>}>
+        <div className="h-[220px] px-2 pb-3 pt-4"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ left: -22, right: 12, top: 5, bottom: 0 }}><defs><linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={critical ? '#ef665e' : '#e8aa3d'} stopOpacity={.28} /><stop offset="100%" stopColor={critical ? '#ef665e' : '#e8aa3d'} stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#263442" strokeDasharray="2 5" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#768493', fontSize: 9 }} axisLine={false} tickLine={false} /><YAxis domain={[0, 100]} tick={{ fill: '#768493', fontSize: 9 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#17232f', border: '1px solid #334454', fontSize: 10 }} labelStyle={{ color: '#aebbc7' }} /><Area type="monotone" dataKey="risk" stroke={critical ? '#ef665e' : '#e8aa3d'} fill="url(#riskFill)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
+      </Panel>
+      <Panel title="Sentinel action stack" eyebrow="STATIONARY GUIDANCE UNIT">
+        <div className="p-4"><div className="mb-4 flex items-center justify-between border border-secondary/20 bg-secondary/5 p-3"><div className="flex items-center gap-2"><span className="status-pulse h-2 w-2 rounded-full bg-secondary" /><span className="data-mono text-[10px] text-secondary">{state.robot.arm}</span></div><span className="data-mono text-[9px] text-muted-foreground">MOCK ESP32</span></div><div className="space-y-2">{[['Display', state.robot.display], ['Route 1 LEDs', state.robot.exitALights], ['Route 2 LEDs', state.robot.exitBLights], ['Audio cue', state.robot.audio]].map(([label, value]) => <div className="flex items-center justify-between border-b border-border/70 py-2 last:border-0" key={label}><span className="text-[10px] text-muted-foreground">{label}</span><span className={`data-mono text-[9px] ${String(value).includes('RED') || String(value).includes('EMERGENCY') ? 'text-destructive' : 'text-foreground'}`}>{value}</span></div>)}</div><button onClick={() => setArmed((value) => !value)} className={`mt-4 flex w-full items-center justify-center gap-2 border py-2.5 text-[10px] font-semibold uppercase tracking-[.12em] ${armed ? 'border-primary/50 bg-primary/10 text-primary' : 'border-destructive/40 bg-destructive/10 text-destructive'}`} data-testid="button-toggle-robot">{armed ? <Siren size={14} /> : <Radio size={14} />}{armed ? 'Pause Sentinel guidance' : 'Resume Sentinel guidance'}</button></div>
+      </Panel>
+    </div>
+    <div className={`mt-5 flex flex-wrap items-center gap-3 border p-3 ${critical ? 'border-destructive/50 bg-destructive/10' : 'border-secondary/25 bg-secondary/5'}`}><CircleAlert size={16} className={critical ? 'text-destructive' : 'text-secondary'} /><p className="min-w-60 flex-1 text-[11px] text-muted-foreground"><span className="font-semibold text-foreground">{critical ? 'Critical crowd risk requires operator confirmation.' : `Intervention ${snapshot?.intervention.status??'NO DATA'}.`}</span> {critical ? 'Verify physical egress and venue procedures before escalating.' : 'The decision engine continues to reassess simulated risk after guidance begins.'}</p><button onClick={()=>void apiFetch<BackendSnapshot>('/control/auto',{method:'POST',body:JSON.stringify({enabled:!snapshot?.automatic_control})}).then(()=>refresh())} className="border border-primary/35 px-3 py-2 data-mono text-[9px] text-primary">{snapshot?.automatic_control?'SWITCH TO MANUAL':'ENABLE AUTOMATIC CONTROL'}</button><ArrowRight size={15} className="text-muted-foreground" /></div>
+  </div>;
+}
+
+function IncidentBrief({ state }: { state: ReturnType<typeof useSentinel>['state'] }) {
+  const active = state.analysis.risk > 55;
+  const critical = state.analysis.risk > 85;
+  const affected = state.predictions.reduce((worst, item) => item.risk > worst.risk ? item : worst, state.predictions[0]);
+  return <section className={`mb-5 grid gap-4 border p-4 sm:grid-cols-[1fr_auto] sm:items-center ${critical ? 'border-destructive/60 bg-destructive/10' : active ? 'border-primary/45 bg-primary/[.06]' : 'border-secondary/35 bg-secondary/[.05]'}`}>
+    <div className="flex items-start gap-3"><div className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center border ${critical ? 'border-destructive/60 text-destructive' : active ? 'border-primary/50 text-primary' : 'border-secondary/50 text-secondary'}`}><CircleAlert size={16} /></div><div><div className="data-mono text-[9px] uppercase tracking-[.16em] text-muted-foreground">Operator brief · {state.system.systemState}</div><div className="mt-1 text-[14px] font-semibold">{active ? `${affected.zone} requires attention` : 'Crowd flow is within normal limits'}</div><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{active ? `${affected.zone} is at ${affected.risk}% risk. ${state.preset.decision}.` : 'No intervention is required. Continue monitoring live density and movement speed.'}</p></div></div>
+    <div className="border-l border-border pl-4 sm:min-w-[180px]"><div className="data-mono text-[8px] uppercase tracking-[.14em] text-muted-foreground">Next action</div><div className={`mt-1 text-[12px] font-semibold ${critical ? 'text-destructive' : active ? 'text-primary' : 'text-secondary'}`}>{active ? state.robot.display : 'Maintain monitoring'}</div><div className="data-mono mt-1 text-[9px] text-muted-foreground">CONFIDENCE {state.analysis.confidence}%</div></div>
+  </section>;
+}
+
+function MetricCard({ label, value, unit, note, tone, icon: Icon, progress }: { label: string; value: string; unit: string; note: string; tone: 'danger' | 'amber' | 'teal'; icon?: typeof Gauge; progress?: number }) {
+  const color = tone === 'danger' ? 'text-destructive' : tone === 'amber' ? 'text-primary' : 'text-secondary';
+  return <div className="panel p-4"><div className="flex items-start justify-between"><span className="data-mono text-[9px] uppercase tracking-[.13em] text-muted-foreground">{label}</span>{Icon && <Icon size={16} className={color} />}</div><div className="mt-3 flex items-baseline gap-2"><span className={`data-mono text-[28px] font-semibold ${color}`}>{value}</span><span className="data-mono text-[9px] text-muted-foreground">{unit}</span></div>{progress !== undefined && <div className="mt-3 h-1 overflow-hidden bg-muted"><div className={`h-full ${tone === 'danger' ? 'bg-destructive' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} /></div>}<div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground"><span className={`h-1.5 w-1.5 rounded-full ${tone === 'danger' ? 'bg-destructive' : tone === 'amber' ? 'bg-primary' : 'bg-secondary'}`} />{note}</div></div>;
+}
+function TraceRow({ step, label, value, tone, last = false }: { step: string; label: string; value: string; tone: 'danger' | 'amber' | 'teal'; last?: boolean }) {
+  const color = tone === 'danger' ? 'text-destructive' : tone === 'amber' ? 'text-primary' : 'text-secondary';
+  return <div className="relative flex gap-3 pb-5"><div className="relative z-10 grid h-6 w-6 shrink-0 place-items-center border border-border bg-card data-mono text-[8px] text-muted-foreground">{step}</div>{!last && <span className="absolute left-3 top-6 h-[calc(100%-12px)] border-l border-dashed border-border" />}<div><div className="data-mono text-[9px] uppercase tracking-[.12em] text-muted-foreground">{label}</div><div className={`mt-1 text-[11px] font-medium ${color}`}>{value}</div></div></div>;
+}

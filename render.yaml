@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: crowdguard-sentinel
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: CROWDGUARD_AI_PROVIDER
+        value: mock
+      - key: CROWDGUARD_DB_PATH
+        value: /tmp/crowdguard.db
+      - key: CROWDGUARD_CORS_ORIGIN_REGEX
+        value: ^https://[a-zA-Z0-9-]+\.vercel\.app$
+      - key: CROWDGUARD_CORS_ORIGINS
+        sync: false

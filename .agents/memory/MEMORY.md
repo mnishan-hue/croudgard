@@ -1,0 +1,1 @@
+- [CrowdGuard frontend integration seam](crowdguard-frontend.md) — keep demo scenarios behind typed API/WebSocket service adapters for the future FastAPI backend.
