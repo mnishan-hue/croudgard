@@ -72,5 +72,10 @@
     "vite": "catalog:",
     "wouter": "^3.3.5",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "@teachablemachine/image": "^0.8.5",
+    "@tensorflow-models/coco-ssd": "2.0.3",
+    "@tensorflow/tfjs": "^1.7.4"
   }
 }

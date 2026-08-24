@@ -1,15 +1,8 @@
-import { type ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
-import LiveControl from '@/pages/live-control';
-import Cameras from '@/pages/cameras';
-import Intelligence from '@/pages/intelligence';
-import Hardware from '@/pages/hardware';
-import Events from '@/pages/events';
-import FacilityConfiguration from '@/pages/facility';
 import { SentinelProvider } from '@/hooks/use-sentinel';
 import { SentinelShell } from '@/components/sentinel-shell';
 import {
@@ -19,6 +12,14 @@ import {
   Router as WouterRouter,
 } from 'wouter';
 
+const LiveControl=lazy(()=>import('@/pages/live-control'));
+const Cameras=lazy(()=>import('@/pages/cameras'));
+const CameraDetail=lazy(()=>import('@/pages/camera-detail'));
+const Intelligence=lazy(()=>import('@/pages/intelligence'));
+const Hardware=lazy(()=>import('@/pages/hardware'));
+const Events=lazy(()=>import('@/pages/events'));
+const FacilityConfiguration=lazy(()=>import('@/pages/facility'));
+const NotFound=lazy(()=>import('@/pages/not-found'));
 const queryClient = new QueryClient();
 
 function Router() {
@@ -27,15 +28,18 @@ function Router() {
     // survives a page crash.
     <RoutedErrorBoundary>
       <SentinelShell>
-        <Switch>
-          <Route path="/" component={LiveControl} />
-          <Route path="/cameras" component={Cameras} />
-          <Route path="/intelligence" component={Intelligence} />
-          <Route path="/hardware" component={Hardware} />
-          <Route path="/events" component={Events} />
-          <Route path="/facility" component={FacilityConfiguration} />
-          <Route component={NotFound} />
-        </Switch>
+        <Suspense fallback={<div className="panel grid min-h-64 place-items-center data-mono text-[10px] text-muted-foreground">LOADING OPERATIONS MODULE</div>}>
+          <Switch>
+            <Route path="/" component={LiveControl} />
+            <Route path="/cameras/:cameraId" component={CameraDetail} />
+            <Route path="/cameras" component={Cameras} />
+            <Route path="/intelligence" component={Intelligence} />
+            <Route path="/hardware" component={Hardware} />
+            <Route path="/events" component={Events} />
+            <Route path="/facility" component={FacilityConfiguration} />
+            <Route component={NotFound} />
+          </Switch>
+        </Suspense>
       </SentinelShell>
     </RoutedErrorBoundary>
   );

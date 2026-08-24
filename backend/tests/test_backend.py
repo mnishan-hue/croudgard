@@ -18,6 +18,25 @@ def test_health_and_snapshot(tmp_path):
     assert snapshot["decision"]["recommended_exit_id"]=="exit_b"
     assert snapshot["prediction"]["simulated"] is True
 
+    assert len(snapshot["risk_timeline"])==len(snapshot["risk_history"])
+    assert any(sample["intervention"] for sample in snapshot["risk_timeline"])
+    assert all(sample["timestamp"] for sample in snapshot["risk_timeline"])
+
+def test_person_count_updates_assigned_zone(tmp_path):
+    api = client(tmp_path)
+    response = api.post("/api/ai/person-count", json={"camera_id": "cam_main", "count": 7, "confidence": .91})
+    assert response.status_code == 200
+    assert response.json()["zone_ids"] == ["zone_main"]
+    snapshot = api.get("/api/crowd/snapshot").json()
+    zone = next(item for item in snapshot["facility"]["zones"] if item["id"] == "zone_main")
+    assert zone["metrics"]["people_count"] == 7
+
+
+def test_person_count_rejects_unknown_camera(tmp_path):
+    api = client(tmp_path)
+    response = api.post("/api/ai/person-count", json={"camera_id": "missing", "count": 1, "confidence": .8})
+    assert response.status_code == 422
+
 
 def test_dynamic_camera_and_exit(tmp_path):
     api=client(tmp_path); facility=api.get("/api/system").json()["facility"]
@@ -94,6 +113,48 @@ def test_manual_control_rejects_closed_exit(tmp_path):
     assert api.patch("/api/exits/exit_b",json={"status":"CLOSED"}).status_code==200
     response=api.post("/api/control/manual",json={"action":"REDIRECT_TO_EXIT","recommended_exit_id":"exit_b"})
     assert response.status_code==422
+
+
+def test_camera_zone_patch_keeps_relationships_consistent(tmp_path):
+    api=client(tmp_path)
+    assert api.patch("/api/cameras/cam_main",json={"zone_ids":["zone_exit_b"]}).status_code==200
+    facility=api.get("/api/system").json()["facility"]
+    camera=next(item for item in facility["cameras"] if item["id"]=="cam_main")
+    exit_zone=next(item for item in facility["zones"] if item["id"]=="zone_exit_b")
+    exit_=next(item for item in facility["exits"] if item["id"]=="exit_b")
+    assert "cam_main" in exit_["camera_ids"]
+    old_zone=next(item for item in facility["zones"] if item["id"]=="zone_main")
+    assert camera["zone_ids"]==["zone_exit_b"]
+    assert "cam_main" in exit_zone["camera_ids"]
+    assert "cam_main" not in old_zone["camera_ids"]
+    assert api.patch("/api/cameras/cam_main",json={"zone_ids":["missing"]}).status_code==422
+
+
+def test_zone_and_exit_patch_validate_references(tmp_path):
+    api=client(tmp_path)
+    assert api.patch("/api/zones/zone_main",json={"camera_ids":["cam_exit_a"]}).status_code==200
+    facility=api.get("/api/system").json()["facility"]
+    camera=next(item for item in facility["cameras"] if item["id"]=="cam_exit_a")
+    assert "zone_main" in camera["zone_ids"]
+    assert api.patch("/api/zones/zone_main",json={"camera_ids":["missing"]}).status_code==422
+    assert api.patch("/api/exits/exit_a",json={"zone_id":"missing"}).status_code==422
+
+
+def test_create_and_control_reject_invalid_references(tmp_path):
+    api=client(tmp_path)
+    camera={"id":"bad_camera","facility_id":"competition_prototype","name":"Bad Camera","zone_ids":["missing"]}
+    assert api.post("/api/cameras",json=camera).status_code==422
+    zone={"id":"bad_zone","facility_id":"other","name":"Bad Zone"}
+    assert api.post("/api/zones",json=zone).status_code==422
+    exit_={"id":"bad_exit","facility_id":"other","name":"Bad Exit","zone_id":"zone_main"}
+    assert api.post("/api/exits",json=exit_).status_code==422
+    command={"action":"NORMAL","sentinel_id":"missing"}
+    assert api.post("/api/control/manual",json=command).status_code==404
+
+
+def test_demo_rejects_unknown_target_zone(tmp_path):
+    api=client(tmp_path)
+    assert api.post("/api/demo/scenario",json={"scenario":"ZONE_CONGESTION","target_id":"missing"}).status_code==422
 
 
 def test_timed_transition_reaches_not_improving_state(tmp_path):

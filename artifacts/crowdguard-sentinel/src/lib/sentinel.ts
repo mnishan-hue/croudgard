@@ -83,3 +83,19 @@ export function getMockState(scenario: Scenario) {
   ];
   return { preset: p, cameras, zones, analysis, predictions, robot, events, explanations, system: { timestamp: now(), systemState: p.risk > 85 ? 'INTERVENTION' : p.risk > 60 ? 'ADVISORY' : 'NOMINAL', aiEngine: 'ONLINE · 42ms', esp32: 'ONLINE · 18ms', emergencyStatus: p.risk > 85 ? 'RESPONSE ACTIVE' : 'CLEAR' } as SystemStatus };
 }
+
+export function getNoDataState(): ReturnType<typeof getMockState> {
+  const baseline = getMockState('normal');
+  return {
+    ...baseline,
+    preset: { ...baseline.preset, risk: 0, state: 'NO DATA', decision: 'Waiting for backend', robot: 'NO DATA', people: 0, a: 0, b: 0, ripple: false },
+    cameras: [],
+    zones: [],
+    predictions: [],
+    analysis: { state: 'NO DATA', risk: 0, confidence: 0, rippleDetected: false, rippleStrength: 0, propagation: 'NONE' },
+    robot: { arm: 'DISCONNECTED', display: 'NO DATA', exitALights: 'N/A', exitBLights: 'N/A', audio: 'NONE', beacon: 'REMOVED' },
+    events: [],
+    explanations: [],
+    system: { timestamp: '—', systemState: 'BACKEND OFFLINE', aiEngine: 'OFFLINE', esp32: 'UNKNOWN', emergencyStatus: 'NO DATA' },
+  };
+}

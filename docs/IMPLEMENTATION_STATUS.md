@@ -25,3 +25,16 @@ This checklist distinguishes implemented prototype behavior from deliberate futu
 - Junction/Sentinel editing beyond creation and backend PATCH calls is intentionally basic in the prototype UI; complete assignments remain available through typed APIs.
 
 These boundaries match the agenda’s requirement to prepare real integrations without presenting simulated measurements as real.
+
+## August 2026 verification follow-up
+
+The detailed verification pass completed the previously identified UI gaps:
+
+- Camera Grid now includes search, zone/status filters, responsive layouts, a 9+ scroll boundary, honest stream labels, and a routed Camera Detail page.
+- Facility Configuration now exposes camera source/type/status/AI/zone assignment and exit status/capacity/availability/camera assignment for create and edit flows.
+- Offline frontend state is explicit NO DATA; scenarios and telemetry use FastAPI rather than a browser-only fake mode.
+- Live Control renders all configured Sentinels and every backend-provided LED route.
+- The backend publishes timestamped risk samples with intervention markers, and Live Control renders the marker on the chart.
+- Routes are lazy-loaded to keep page modules out of the initial application chunk.
+
+Backend relationship validation, exit ranking, facility maps, manual controls, mock hardware, and WebSocket snapshots remain dynamic and covered by the API test suite.

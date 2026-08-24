@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, EventLog, Exit, Facility, Junction, ManualControlRequest, ScenarioRequest, Sentinel, Zone
+from backend.models import AutoControlRequest, Camera, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, ScenarioRequest, Sentinel, Zone
 from backend.service import CrowdGuardService, SCENARIOS
 from backend.store import SQLiteStore
 
@@ -83,6 +83,14 @@ def active():
     return facility
 
 
+@app.post("/api/ai/person-count")
+def person_count(observation: PersonCountObservation):
+    try:
+        return service.record_person_count(observation)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/cameras")
 def cameras(): return active().cameras
 
@@ -92,9 +100,13 @@ def add_camera(camera: Camera):
     facility = active()
     if any(item.id == camera.id for item in facility.cameras): raise HTTPException(409, "Camera ID already exists")
     if camera.facility_id != facility.id: raise HTTPException(422, "Camera facility_id must match active facility")
+    unknown=set(camera.zone_ids)-{zone.id for zone in facility.zones}
+    if unknown: raise HTTPException(422,f"Unknown zones: {sorted(unknown)}")
     facility.cameras.append(camera)
     for zone in facility.zones:
         if zone.id in camera.zone_ids and camera.id not in zone.camera_ids: zone.camera_ids.append(camera.id)
+    for exit_ in facility.exits:
+        if exit_.zone_id in camera.zone_ids and camera.id not in exit_.camera_ids: exit_.camera_ids.append(camera.id)
     store.save_facility(facility); store.add_event(EventLog(category="CONFIGURATION", message=f"Camera {camera.name} added")); return camera
 
 
@@ -102,7 +114,19 @@ def add_camera(camera: Camera):
 def update_camera(camera_id: str, changes: dict):
     facility=active(); current=next((x for x in facility.cameras if x.id==camera_id),None)
     if not current: raise HTTPException(404,"Camera not found")
-    updated=Camera.model_validate({**current.model_dump(),**changes,"id":camera_id,"facility_id":facility.id}); facility.cameras=[updated if x.id==camera_id else x for x in facility.cameras]; store.save_facility(facility); return updated
+    updated=Camera.model_validate({**current.model_dump(),**changes,"id":camera_id,"facility_id":facility.id})
+    unknown=set(updated.zone_ids)-{zone.id for zone in facility.zones}
+    if unknown: raise HTTPException(422,f"Unknown zones: {sorted(unknown)}")
+    facility.cameras=[updated if x.id==camera_id else x for x in facility.cameras]
+    for zone in facility.zones:
+        zone.camera_ids=[value for value in zone.camera_ids if value!=camera_id]
+        if zone.id in updated.zone_ids: zone.camera_ids.append(camera_id)
+    for exit_ in facility.exits:
+        exit_.camera_ids=[value for value in exit_.camera_ids if value!=camera_id]
+        if exit_.zone_id in updated.zone_ids: exit_.camera_ids.append(camera_id)
+    store.save_facility(facility)
+    store.add_event(EventLog(category="CONFIGURATION",message=f"Camera {updated.name} updated"))
+    return updated
 
 
 @app.delete("/api/cameras/{camera_id}", status_code=204)
@@ -123,6 +147,11 @@ def zones(): return active().zones
 def add_zone(zone: Zone):
     facility=active()
     if any(x.id==zone.id for x in facility.zones): raise HTTPException(409,"Zone ID already exists")
+    if zone.facility_id != facility.id: raise HTTPException(422,"Zone facility_id must match active facility")
+    unknown=set(zone.camera_ids)-{camera.id for camera in facility.cameras}
+    if unknown: raise HTTPException(422,f"Unknown cameras: {sorted(unknown)}")
+    for camera in facility.cameras:
+        if camera.id in zone.camera_ids and zone.id not in camera.zone_ids: camera.zone_ids.append(zone.id)
     facility.zones.append(zone); store.save_facility(facility); return zone
 
 
@@ -130,7 +159,19 @@ def add_zone(zone: Zone):
 def update_zone(zone_id: str, changes: dict):
     facility=active(); current=next((x for x in facility.zones if x.id==zone_id),None)
     if not current: raise HTTPException(404,"Zone not found")
-    updated=Zone.model_validate({**current.model_dump(),**changes,"id":zone_id,"facility_id":facility.id}); facility.zones=[updated if x.id==zone_id else x for x in facility.zones]; store.save_facility(facility); return updated
+    updated=Zone.model_validate({**current.model_dump(),**changes,"id":zone_id,"facility_id":facility.id})
+    unknown=set(updated.camera_ids)-{camera.id for camera in facility.cameras}
+    if unknown: raise HTTPException(422,f"Unknown cameras: {sorted(unknown)}")
+    facility.zones=[updated if x.id==zone_id else x for x in facility.zones]
+    for camera in facility.cameras:
+        camera.zone_ids=[value for value in camera.zone_ids if value!=zone_id]
+        if camera.id in updated.camera_ids: camera.zone_ids.append(zone_id)
+    for exit_ in facility.exits:
+        if exit_.zone_id==zone_id: exit_.camera_ids=list(updated.camera_ids)
+
+    store.save_facility(facility)
+    store.add_event(EventLog(category="CONFIGURATION",message=f"Zone {updated.name} updated"))
+    return updated
 
 
 @app.delete("/api/zones/{zone_id}", status_code=204)
@@ -151,6 +192,9 @@ def exits(): return active().exits
 def add_exit(exit_: Exit):
     facility=active()
     if any(x.id==exit_.id for x in facility.exits): raise HTTPException(409,"Exit ID already exists")
+    unknown=set(exit_.camera_ids)-{camera.id for camera in facility.cameras}
+    if unknown: raise HTTPException(422,f"Unknown cameras: {sorted(unknown)}")
+    if exit_.facility_id != facility.id: raise HTTPException(422,"Exit facility_id must match active facility")
     if not any(z.id==exit_.zone_id for z in facility.zones): raise HTTPException(422,"Assigned zone does not exist")
     facility.exits.append(exit_); store.save_facility(facility); store.add_event(EventLog(category="CONFIGURATION",message=f"Exit {exit_.name} added")); return exit_
 
@@ -159,7 +203,11 @@ def add_exit(exit_: Exit):
 def update_exit(exit_id: str, changes: dict):
     facility=active(); current=next((x for x in facility.exits if x.id==exit_id),None)
     if not current: raise HTTPException(404,"Exit not found")
-    updated=Exit.model_validate({**current.model_dump(),**changes,"id":exit_id,"facility_id":facility.id}); facility.exits=[updated if x.id==exit_id else x for x in facility.exits]; store.save_facility(facility); return updated
+    updated=Exit.model_validate({**current.model_dump(),**changes,"id":exit_id,"facility_id":facility.id})
+    if not any(zone.id==updated.zone_id for zone in facility.zones): raise HTTPException(422,"Assigned zone does not exist")
+    unknown=set(updated.camera_ids)-{camera.id for camera in facility.cameras}
+    if unknown: raise HTTPException(422,f"Unknown cameras: {sorted(unknown)}")
+    facility.exits=[updated if x.id==exit_id else x for x in facility.exits]; store.save_facility(facility); store.add_event(EventLog(category="CONFIGURATION",message=f"Exit {updated.name} updated")); return updated
 
 
 @app.delete("/api/exits/{exit_id}", status_code=204)
@@ -241,14 +289,14 @@ def auto_control(request: AutoControlRequest): store.set_setting("automatic_cont
 
 @app.post("/api/control/manual")
 def manual_control(request: ManualControlRequest):
-    facility=active(); sentinel=next((x for x in facility.sentinels if x.id==request.sentinel_id),facility.sentinels[0] if facility.sentinels else None)
+    facility=active()
+    sentinel=next((x for x in facility.sentinels if x.id==request.sentinel_id),None) if request.sentinel_id else (facility.sentinels[0] if facility.sentinels else None)
+    if request.sentinel_id and not sentinel: raise HTTPException(404,"Sentinel not found")
     if request.action=="REDIRECT_TO_EXIT" and not any(x.id==request.recommended_exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits): raise HTTPException(422,"Recommended exit is not available")
     if not sentinel: raise HTTPException(422,"No Sentinel configured")
     service.hardware.set_state(sentinel,request.model_dump()); store.set_setting("automatic_control","false"); store.save_facility(facility); store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if request.action=="CRITICAL" else "WARNING",message=f"Manual {request.action} command sent to {sentinel.name}")); return service.snapshot()
 
 
-@app.post("/api/hardware/commands")
-def legacy_hardware_command(command: dict): return {"accepted": True, "simulated": True, "command": command}
 
 
 @app.websocket("/ws/live")

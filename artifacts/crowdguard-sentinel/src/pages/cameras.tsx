@@ -1,43 +1,67 @@
-import { useState } from 'react';
-import { Camera as CameraIcon, Crosshair, Expand, EyeOff, LocateFixed, Maximize2, Pause, Play, ScanLine, Signal, Users } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Camera as CameraIcon, ExternalLink, Search, Signal, Users } from 'lucide-react';
+import { Link } from 'wouter';
+import { PageIntro, ScenarioControls } from '@/components/sentinel-shell';
 import { useSentinel } from '@/hooks/use-sentinel';
-import { PageIntro, Panel, ScenarioControls } from '@/components/sentinel-shell';
+import type { Camera, Zone } from '@/types/sentinel';
 
 export default function Cameras() {
-  const { state } = useSentinel();
-  const [selected, setSelected] = useState('');
-  const [paused, setPaused] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const camera = state.cameras.find((item) => item.id === selected) ?? state.cameras[0];
-  const detections = [
-    { label: 'Anonymous tracks', Icon: Users, value: `${camera.peopleDetected} active`, tone: 'text-secondary' },
-    { label: 'Trajectory clusters', Icon: LocateFixed, value: `${camera.density > 55 ? 8 : 4} groups`, tone: 'text-primary' },
-    { label: 'Occlusion state', Icon: EyeOff, value: camera.density > 75 ? 'Elevated' : 'Nominal', tone: camera.density > 75 ? 'text-destructive' : 'text-secondary' },
-    { label: 'Signal integrity', Icon: Signal, value: camera.online ? '99.7% packet health' : 'No signal', tone: camera.online ? 'text-secondary' : 'text-destructive' },
-  ];
+  const { snapshot, connection, refresh } = useSentinel();
+  const [query, setQuery] = useState('');
+  const [zoneId, setZoneId] = useState('ALL');
+  const [status, setStatus] = useState('ALL');
+
+  const cameras = snapshot?.facility.cameras ?? [];
+  const zones = snapshot?.facility.zones ?? [];
+  const filtered = useMemo(() => cameras.filter((camera) => {
+    const searchable = `${camera.name} ${camera.id} ${camera.camera_type} ${camera.source}`.toLowerCase();
+    const matchesQuery = searchable.includes(query.trim().toLowerCase());
+    const matchesZone = zoneId === 'ALL' || camera.zone_ids.includes(zoneId);
+    const matchesStatus = status === 'ALL'
+      || (status === 'ONLINE' && camera.enabled && camera.status === 'ONLINE')
+      || (status === 'OFFLINE' && (!camera.enabled || camera.status === 'OFFLINE'))
+      || (status === 'DEGRADED' && camera.status === 'DEGRADED');
+    return matchesQuery && matchesZone && matchesStatus;
+  }), [cameras, query, status, zoneId]);
+
   return <div className="enter-rise">
-    <PageIntro eyebrow="02 / COMPUTER VISION" title="Camera Analysis" description="Inspect configured camera coverage and simulated analysis. Overlays are demo visualisations until a real computer-vision provider is connected." action={<div className="flex items-center gap-2"><span className="grid h-7 w-7 place-items-center border border-primary/35 bg-primary/10 text-primary"><CameraIcon size={14} /></span><span className="data-mono text-[9px] text-muted-foreground">{state.cameras.length} FEEDS · DEMO VISUALISATION</span></div>} />
+    <PageIntro eyebrow="02 / COMPUTER VISION" title="Camera Grid" description="Search and inspect every configured camera. Simulated analysis is labelled DEMO; unavailable streams are never presented as live video." action={<div className="flex items-center gap-2 border border-primary/30 bg-primary/5 px-3 py-2"><CameraIcon size={14} className="text-primary"/><span className="data-mono text-[9px] text-muted-foreground">{cameras.length} CONFIGURED</span></div>}/>
     <ScenarioControls />
-    <div className="mb-5 grid gap-3 md:grid-cols-3">{state.cameras.map((item) => <button key={item.id} onClick={() => setSelected(item.id)} className={`panel flex items-center gap-3 p-3 text-left transition-colors ${selected === item.id ? 'border-primary/70 bg-primary/[.06]' : 'hover:border-muted-foreground/45'}`} data-testid={`button-select-camera-${item.id}`}><div className={`grid h-9 w-9 place-items-center border ${item.online ? 'border-secondary/35 bg-secondary/10 text-secondary' : 'border-destructive/35 bg-destructive/10 text-destructive'}`}><CameraIcon size={16} /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2 text-[11px] font-semibold">{item.name}<span className={`h-1.5 w-1.5 rounded-full ${item.online ? 'bg-secondary' : 'bg-destructive'}`} /></div><div className="data-mono mt-1 truncate text-[9px] text-muted-foreground">{item.zone} · {item.fps} FPS</div></div><div className="data-mono text-[17px] text-primary">{item.density}<span className="ml-0.5 text-[8px] text-muted-foreground">%</span></div></button>)}</div>
-    <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
-      <Panel title={`${camera.name} · ${camera.zone}`} eyebrow={`FEED ${camera.id.toUpperCase()} / ANONYMOUS MODE`} action={<div className="flex items-center gap-3"><span className="flex items-center gap-1 data-mono text-[9px] text-secondary"><span className="status-pulse h-1.5 w-1.5 rounded-full bg-secondary" /> LIVE</span><Maximize2 size={14} className="text-muted-foreground" /></div>}>
-        <div className={`scanline relative overflow-hidden bg-[#0b151f] ${expanded ? 'h-[480px]' : 'h-[390px]'}`}>
-          <div className="absolute inset-0 opacity-45" style={{ backgroundImage: 'linear-gradient(110deg, transparent 30%, rgba(65,180,185,.12) 30.4%, transparent 31%), linear-gradient(90deg, rgba(47,67,82,.45) 1px, transparent 1px), linear-gradient(rgba(47,67,82,.45) 1px, transparent 1px)', backgroundSize: '100% 100%, 42px 42px, 42px 42px' }} />
-          <div className="absolute left-[18%] top-[14%] h-[64%] w-[64%] border border-secondary/30"><div className="absolute left-[12%] top-[14%] h-[72%] w-[34%] border border-dashed border-primary/25" /><div className="absolute right-[8%] top-[28%] h-[48%] w-[30%] border border-dashed border-primary/25" /></div>
-          {[...Array(16)].map((_, i) => <div key={i} className="absolute h-3 w-2 border border-secondary/70 bg-secondary/15" style={{ left: `${18 + (i * 19) % 61}%`, top: `${24 + (i * 31) % 48}%`, transform: `scale(${.7 + (i % 3) * .2})` }}><span className="absolute -left-1 -top-2 h-1 w-1 rounded-full bg-secondary" /></div>)}
-          <div className="absolute left-[44%] top-[45%] h-14 w-20 -translate-x-1/2 -translate-y-1/2 border border-primary/70 bg-primary/5"><div className="absolute -top-4 left-0 data-mono text-[8px] text-primary">TRACK_0084 · 0.94</div><Crosshair size={13} className="absolute -left-1 -top-1 text-primary" /></div>
-          <div className="absolute left-3 top-3 flex items-center gap-2 border border-border bg-background/80 px-2 py-1.5 data-mono text-[8px] text-muted-foreground"><ScanLine size={12} className="text-secondary" /> INFERENCE OVERLAY · ON {paused && '· PAUSED'}</div>
-          <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between"><div><div className="data-mono text-[9px] text-foreground">{camera.resolution}</div><div className="data-mono mt-1 text-[8px] text-muted-foreground">{camera.processing} · PRIVACY MASK ACTIVE</div></div><div className="flex gap-1"><button onClick={() => setPaused((value) => !value)} className="grid h-7 w-7 place-items-center border border-border bg-background/80 text-muted-foreground hover:text-foreground" aria-label={paused ? 'Resume feed' : 'Pause feed'} data-testid="button-pause-camera">{paused ? <Play size={12} /> : <Pause size={12} />}</button><button onClick={() => setExpanded((value) => !value)} className="grid h-7 w-7 place-items-center border border-border bg-background/80 text-muted-foreground hover:text-foreground" aria-label={expanded ? 'Shrink feed' : 'Expand feed'} data-testid="button-expand-camera"><Expand size={12} /></button></div></div>
-        </div>
-      </Panel>
-      <Panel title="Feed metrics" eyebrow="CURRENT WINDOW">
-        <div className="grid grid-cols-2 gap-px bg-border">{[['People detected', camera.peopleDetected, 'tracks'], ['Density', `${camera.density}%`, 'of field'], ['Frame rate', camera.fps, 'FPS'], ['Latency', camera.online ? '38' : '—', 'ms']].map(([label, value, unit]) => <div className="bg-card p-4" key={String(label)}><div className="data-mono text-[9px] uppercase tracking-[.12em] text-muted-foreground">{label}</div><div className="mt-2 data-mono text-[23px] text-foreground">{value}</div><div className="data-mono mt-1 text-[9px] text-muted-foreground">{unit}</div></div>)}</div>
-        <div className="border-t border-border p-4"><div className="mb-3 flex items-center justify-between"><span className="text-[11px] font-semibold">Density heatmap</span><span className="data-mono text-[9px] text-primary">LIVE / 5s</span></div><div className="relative h-[104px] overflow-hidden border border-border bg-[#111c27]"><div className="absolute inset-0 grid grid-cols-8 grid-rows-4 gap-1 p-2 opacity-80">{[...Array(32)].map((_, i) => <span key={i} className={`rounded-[1px] ${i % 7 === 0 || (camera.density > 70 && i % 5 === 0) ? 'bg-destructive/85' : i % 3 === 0 ? 'bg-primary/55' : 'bg-secondary/20'}`} />)}</div><div className="absolute bottom-2 left-2 right-2 flex justify-between data-mono text-[8px] text-muted-foreground"><span>LOW</span><span className="text-primary">MEDIUM</span><span className="text-destructive">HIGH</span></div></div></div>
-      </Panel>
-    </div>
-    <div className="mt-5 grid gap-5 lg:grid-cols-2">
-      <Panel title="Flow vectors" eyebrow="DIRECTIONAL FIELD / 1 MIN"><div className="p-4"><div className="relative h-[160px] overflow-hidden border border-border bg-[#101b27] grid-surface">{[...Array(10)].map((_, i) => <span key={i} className="absolute flex items-center text-secondary" style={{ left: `${8 + (i * 13) % 78}%`, top: `${15 + (i * 29) % 63}%`, transform: `rotate(${camera.density > 60 ? -8 : 4}deg)` }}><span className="h-px w-10 bg-secondary/70" /><span className="border-y-4 border-l-4 border-y-transparent border-l-secondary/70" /></span>)}<div className="absolute bottom-2 left-2 data-mono text-[8px] text-muted-foreground">VECTOR MAGNITUDE · 0.4—1.8 M/S</div></div><div className="mt-3 flex items-center justify-between data-mono text-[9px] text-muted-foreground"><span>INBOUND <b className="text-primary">{state.zones[0].inflow}</b> / MIN</span><span>OUTBOUND <b className="text-secondary">{state.zones[0].outflow}</b> / MIN</span><span>CONFLICT <b className="text-destructive">{state.zones[0].directionConflict}%</b></span></div></div></Panel>
-      <Panel title="Detection channels" eyebrow="MODEL OUTPUT"><div className="divide-y divide-border">{detections.map(({ label, Icon, value, tone }) => <div className="flex items-center gap-3 px-4 py-3" key={label}><Icon size={15} className={tone} /><span className="text-[11px] text-muted-foreground">{label}</span><span className={`data-mono ml-auto text-[9px] ${tone}`}>{value}</span></div>)}</div></Panel>
-    </div>
+    {!snapshot ? <div className="panel grid min-h-56 place-items-center p-8 text-center"><div><div className="data-mono text-[11px] text-primary">{connection==='connecting'?'LOADING CAMERA CONFIGURATION':'BACKEND OFFLINE'}</div><p className="mt-2 text-[11px] text-muted-foreground">Camera data is not replaced with fabricated browser values.</p><button onClick={()=>void refresh()} className="mt-4 border border-primary/40 px-3 py-2 data-mono text-[9px] text-primary">RETRY</button></div></div> : <>
+      <div className="mb-4 flex flex-col gap-2 border border-border bg-muted/20 p-3 lg:flex-row lg:items-center">
+        <label className="flex min-w-56 flex-1 items-center gap-2 border border-border bg-card px-3 py-2"><Search size={13} className="text-muted-foreground"/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Search camera name, ID, type or source" className="w-full bg-transparent text-[10px] outline-none"/></label>
+        <select value={zoneId} onChange={(event)=>setZoneId(event.target.value)} className="border border-border bg-card px-3 py-2 data-mono text-[9px]"><option value="ALL">ALL ZONES</option>{zones.map((zone)=><option key={zone.id} value={zone.id}>{zone.name}</option>)}</select>
+        <select value={status} onChange={(event)=>setStatus(event.target.value)} className="border border-border bg-card px-3 py-2 data-mono text-[9px]"><option value="ALL">ALL STATUS</option><option value="ONLINE">ONLINE</option><option value="DEGRADED">DEGRADED</option><option value="OFFLINE">OFFLINE / DISABLED</option></select>
+        <span className="data-mono min-w-20 text-right text-[9px] text-muted-foreground">{filtered.length} / {cameras.length}</span>
+      </div>
+      <div className={`grid gap-3 ${filtered.length<=2?'lg:grid-cols-2':filtered.length<=4?'md:grid-cols-2':'sm:grid-cols-2 xl:grid-cols-3'} ${cameras.length>=9?'max-h-[720px] overflow-y-auto pr-1':''}`}>
+        {filtered.map((camera)=><CameraCard key={camera.id} camera={camera} zones={zones} provider={snapshot.ai_provider} simulated={snapshot.prediction.simulated}/>)}
+        {filtered.length===0&&<div className="panel col-span-full grid min-h-44 place-items-center data-mono text-[10px] text-muted-foreground">NO CAMERAS MATCH THE CURRENT FILTERS</div>}
+      </div>
+    </>}
   </div>;
+}
+
+function CameraCard({camera,zones,provider,simulated}:{camera:Camera;zones:Zone[];provider:string;simulated:boolean}) {
+  const assigned=zones.filter((zone)=>camera.zone_ids.includes(zone.id));
+  const metrics=assigned.sort((a,b)=>b.risk-a.risk)[0];
+  const online=camera.enabled&&camera.status==='ONLINE';
+  return <article className="panel overflow-hidden">
+    <div className="relative grid h-40 place-items-center overflow-hidden bg-[#0b151f] grid-surface">
+      <div className="absolute inset-0 opacity-50" style={{backgroundImage:'radial-gradient(circle at 32% 45%, rgba(65,180,185,.22), transparent 22%), radial-gradient(circle at 68% 58%, rgba(232,170,61,.18), transparent 24%)'}}/>
+      <CameraIcon size={28} className="text-muted-foreground/50"/>
+      <span className={`absolute left-3 top-3 border px-2 py-1 data-mono text-[8px] ${online?'border-secondary/40 bg-secondary/10 text-secondary':'border-destructive/40 bg-destructive/10 text-destructive'}`}>{online?'DEMO FEED':'NO LIVE STREAM'}</span>
+      <span className="absolute right-3 top-3 border border-border bg-background/80 px-2 py-1 data-mono text-[8px] text-primary">{simulated?'MOCK AI':'LIVE AI'}</span>
+    </div>
+    <div className="p-4">
+      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate text-[13px] font-semibold">{camera.name}</h2><div className="data-mono mt-1 truncate text-[8px] text-muted-foreground">{camera.id} · {camera.camera_type}</div></div><span className={`data-mono text-[9px] ${online?'text-secondary':'text-destructive'}`}>{camera.enabled?camera.status:'DISABLED'}</span></div>
+      <div className="mt-3 truncate text-[9px] text-muted-foreground">{assigned.map((zone)=>zone.name).join(', ')||'Unassigned camera'}</div>
+      <div className="mt-4 grid grid-cols-3 gap-px bg-border"><Metric icon={Users} label="PEOPLE" value={String(metrics?.metrics.people_count??'—')}/><Metric icon={Signal} label="DENSITY" value={metrics?`${Math.round(metrics.metrics.density)}%`:'—'}/><Metric label="RISK" value={metrics?`${Math.round(metrics.risk)}%`:'—'}/></div>
+      <div className="mt-3 flex items-center justify-between"><span className="data-mono text-[8px] text-muted-foreground">{provider} · {camera.ai_enabled?'AI ENABLED':'AI DISABLED'}</span><Link href={`/cameras/${encodeURIComponent(camera.id)}`} className="flex items-center gap-1 border border-primary/35 px-2.5 py-1.5 data-mono text-[8px] text-primary">OPEN DETAIL <ExternalLink size={11}/></Link></div>
+    </div>
+  </article>;
+}
+
+function Metric({icon:Icon,label,value}:{icon?:typeof Users;label:string;value:string}) {
+  return <div className="bg-card p-2.5">{Icon&&<Icon size={11} className="mb-1 text-secondary"/>}<div className="data-mono text-[7px] text-muted-foreground">{label}</div><div className="data-mono mt-1 text-[12px] text-foreground">{value}</div></div>;
 }

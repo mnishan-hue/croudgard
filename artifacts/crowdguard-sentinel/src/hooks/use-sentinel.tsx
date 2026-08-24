@@ -1,9 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getMockState, type Scenario } from '@/lib/sentinel';
+import { getMockState, getNoDataState, type Scenario } from '@/lib/sentinel';
 import type { BackendSnapshot, Facility } from '@/types/sentinel';
 import { apiFetch } from '@/services/api';
 import { connectSentinelSocket } from '@/services/websocket';
-import { serviceConfig } from '@/services/config';
 
 type Connection = 'connecting'|'open'|'closed'|'error';
 const Context=createContext<{scenario:Scenario;setScenario:(s:Scenario)=>void;state:ReturnType<typeof getMockState>;snapshot:BackendSnapshot|null;facilities:Facility[];connection:Connection;error:string|null;refresh:()=>Promise<void>;selectFacility:(id:string)=>Promise<void>}|null>(null);
@@ -19,11 +18,11 @@ function adapt(snapshot:BackendSnapshot):ReturnType<typeof getMockState>{
 }
 export function SentinelProvider({children}:{children:ReactNode}){
  const [scenario,setScenarioState]=useState<Scenario>('exitA'),[snapshot,setSnapshot]=useState<BackendSnapshot|null>(null),[facilities,setFacilities]=useState<Facility[]>([]),[connection,setConnection]=useState<Connection>('connecting'),[error,setError]=useState<string|null>(null);
- const refresh=useCallback(async()=>{if(serviceConfig.useMockData)return;try{const [s,f]=await Promise.all([apiFetch<BackendSnapshot>('/system'),apiFetch<Facility[]>('/facilities')]);setSnapshot(s);setFacilities(f);setError(null)}catch(e){setError(e instanceof Error?e.message:'BACKEND OFFLINE');setConnection('error')}},[]);
+ const refresh=useCallback(async()=>{try{const [s,f]=await Promise.all([apiFetch<BackendSnapshot>('/system'),apiFetch<Facility[]>('/facilities')]);setSnapshot(s);setFacilities(f);setError(null)}catch(e){setError(e instanceof Error?e.message:'BACKEND OFFLINE');setConnection('error')}},[]);
  useEffect(()=>{void refresh();return connectSentinelSocket<BackendSnapshot>(setSnapshot,setConnection)},[refresh]);
- const setScenario=useCallback((s:Scenario)=>{setScenarioState(s);if(!serviceConfig.useMockData)void apiFetch<BackendSnapshot>('/demo/scenario',{method:'POST',body:JSON.stringify({scenario:scenarioNames[s],timed:true})}).then(setSnapshot).catch(e=>setError(String(e)))},[]);
+ const setScenario=useCallback((s:Scenario)=>{setScenarioState(s);void apiFetch<BackendSnapshot>('/demo/scenario',{method:'POST',body:JSON.stringify({scenario:scenarioNames[s],timed:true})}).then(setSnapshot).catch(e=>setError(String(e)))},[]);
  const selectFacility=useCallback(async(id:string)=>{const s=await apiFetch<BackendSnapshot>(`/demo/facility/${id}`,{method:'POST'});setSnapshot(s)},[]);
- const state=useMemo(()=>snapshot?adapt(snapshot):getMockState(scenario),[snapshot,scenario]);
+ const state=useMemo(()=>snapshot?adapt(snapshot):getNoDataState(),[snapshot]);
  return <Context.Provider value={{scenario,setScenario,state,snapshot,facilities,connection,error,refresh,selectFacility}}>{children}</Context.Provider>
 }
 export function useSentinel(){const value=useContext(Context);if(!value)throw new Error('useSentinel must be used within SentinelProvider');return value}

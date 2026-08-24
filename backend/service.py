@@ -1,10 +1,11 @@
 import time
 import threading
+from datetime import datetime, timedelta, timezone
 
 from backend.ai.mock import MockAIProvider
 from backend.decision import DecisionEngine
 from backend.hardware.mock_esp32 import MockESP32Client
-from backend.models import EventLog, Intervention, LiveSnapshot
+from backend.models import EventLog, Intervention, LiveSnapshot, RiskSample
 
 
 SCENARIOS = {"NORMAL": 20, "EXIT_A_CONGESTION": 82, "EXIT_B_CONGESTION": 82, "RIPPLE_DETECTED": 78, "CRITICAL_STATE": 95, "RECOVERY": 31, "ZONE_CONGESTION": 76, "EXIT_CONGESTION": 84, "MULTI_ZONE_EVENT": 88}
@@ -12,7 +13,11 @@ SCENARIOS = {"NORMAL": 20, "EXIT_A_CONGESTION": 82, "EXIT_B_CONGESTION": 82, "RI
 
 class CrowdGuardService:
     def __init__(self, store):
-        self.store = store; self.ai = MockAIProvider(); self.decision_engine = DecisionEngine(); self.hardware = MockESP32Client(); self.risk_history = [22,31,44,56,69,82,76,65,53,41,29]; self._transition_lock=threading.Lock(); self._transition_id=0
+        self.store = store; self.ai = MockAIProvider(); self.decision_engine = DecisionEngine(); self.hardware = MockESP32Client(); self.risk_history = [22,31,44,56,69,82,76,65,53,41,29]
+        self.camera_people_counts: dict[str, int] = {}
+        now=datetime.now(timezone.utc)
+        self.risk_timeline=[RiskSample(timestamp=(now-timedelta(seconds=(len(self.risk_history)-index-1)*10)).isoformat(),risk=risk,intervention=index==5) for index,risk in enumerate(self.risk_history)]
+        self._transition_lock=threading.Lock(); self._transition_id=0
 
     def begin_transition(self):
         with self._transition_lock: self._transition_id+=1; return self._transition_id
@@ -28,15 +33,38 @@ class CrowdGuardService:
         rising_three=len(self.risk_history)>2 and self.risk_history[-1] > self.risk_history[-2] > self.risk_history[-3]
         status="RESOLVED" if prediction.risk < 40 else "EFFECTIVE" if falling else "NOT_IMPROVING" if rising_three and prediction.risk >= 70 else "ACTIVE"
         intervention = Intervention(status=status, recommended_exit_id=decision.recommended_exit_id, affected_zone_id=decision.affected_zone_id, started_risk=max(self.risk_history), current_risk=prediction.risk)
-        return LiveSnapshot(facility=facility, automatic_control=self.store.get_setting("automatic_control") == "true", prediction=prediction, decision=decision, intervention=intervention, events=self.store.events(), risk_history=self.risk_history)
+        return LiveSnapshot(facility=facility, automatic_control=self.store.get_setting("automatic_control") == "true", prediction=prediction, decision=decision, intervention=intervention, events=self.store.events(), risk_history=self.risk_history, risk_timeline=self.risk_timeline)
+
+    def record_person_count(self, observation):
+        facility = self.facility
+        camera = next((item for item in facility.cameras if item.id == observation.camera_id), None)
+        if camera is None:
+            raise ValueError("Camera does not exist in the active facility")
+        if not camera.enabled or not camera.ai_enabled:
+            raise ValueError("Camera or camera AI is disabled")
+        self.camera_people_counts[camera.id] = observation.count
+        affected = []
+        for zone in facility.zones:
+            observed = [self.camera_people_counts[camera_id] for camera_id in zone.camera_ids if camera_id in self.camera_people_counts]
+            if observed:
+                zone.metrics.people_count = sum(observed)
+                affected.append(zone.id)
+        self.store.save_facility(facility)
+        return {"camera_id": camera.id, "count": observation.count, "confidence": observation.confidence, "captured_at": observation.captured_at, "zone_ids": affected}
 
     def apply_scenario(self, scenario, target_id=None, value_override=None):
         facility = self.facility; value = value_override if value_override is not None else SCENARIOS.get(scenario.upper())
         if value is None: raise ValueError("Unknown scenario")
         targets = [z for z in facility.zones if z.enabled]
-        if target_id: targets = [z for z in targets if z.id == target_id]
-        elif "EXIT_A" in scenario: targets = [z for z in targets if z.id.endswith("exit_a")]
-        elif "EXIT_B" in scenario: targets = [z for z in targets if z.id.endswith("exit_b")]
+        if target_id:
+            targets = [z for z in targets if z.id == target_id]
+            if not targets: raise ValueError("Target zone does not exist or is disabled")
+        elif scenario.upper() in {"EXIT_A_CONGESTION", "EXIT_B_CONGESTION"}:
+            index = 0 if scenario.upper() == "EXIT_A_CONGESTION" else 1
+            configured = [exit_ for exit_ in facility.exits if exit_.enabled]
+            if len(configured) <= index: raise ValueError("Scenario requires another enabled exit")
+            selected_zone_id = configured[index].zone_id
+            targets = [zone for zone in targets if zone.id == selected_zone_id]
         elif scenario not in {"MULTI_ZONE_EVENT", "NORMAL", "RECOVERY"}: targets = targets[:1]
         for zone in facility.zones:
             if zone in targets:
@@ -45,7 +73,10 @@ class CrowdGuardService:
         for exit_ in facility.exits:
             zone = next((z for z in facility.zones if z.id == exit_.zone_id), None)
             if zone: exit_.risk=zone.risk; exit_.status="CONGESTED" if zone.risk>=70 else "CAUTION" if zone.risk>=40 else "AVAILABLE"
-        self.store.save_facility(facility); self.risk_history=(self.risk_history+[value])[-30:]
+        marker=value>=45 and (not self.risk_history or self.risk_history[-1]<45)
+        self.risk_history=(self.risk_history+[value])[-30:]
+        self.risk_timeline=(self.risk_timeline+[RiskSample(risk=value,intervention=marker)])[-30:]
+        self.store.save_facility(facility)
         decision=self.decision_engine.decide(facility.zones,facility.exits)
         if self.store.get_setting("automatic_control") == "true" and decision.action != "NORMAL":
             for sentinel in facility.sentinels: self.hardware.set_state(sentinel, decision.model_dump())

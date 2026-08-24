@@ -73,7 +73,6 @@ The root `vercel.json` builds only `artifacts/crowdguard-sentinel` and provides 
 
    - `VITE_API_BASE_URL=https://YOUR-SERVICE.onrender.com/api`
    - `VITE_WS_URL=wss://YOUR-SERVICE.onrender.com/ws/live`
-   - `VITE_USE_MOCK_DATA=false`
 
 3. Deploy. The build intentionally fails with a clear message if either backend URL is absent.
 4. If using a custom Vercel domain, set `CROWDGUARD_CORS_ORIGINS=https://your-domain.example` on Render and redeploy the backend. Standard `*.vercel.app` production and preview URLs are accepted by the configured origin regex.

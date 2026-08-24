@@ -3,7 +3,7 @@ import { serviceConfig } from './config';
 export type SentinelMessageHandler<T> = (message: T) => void;
 
 export function connectSentinelSocket<T>(onMessage:SentinelMessageHandler<T>,onStatus?:(status:'connecting'|'open'|'closed'|'error')=>void):()=>void{
-  if(serviceConfig.useMockData||!serviceConfig.websocketUrl){onStatus?.('closed');return()=>undefined}
+  if(!serviceConfig.websocketUrl){onStatus?.('closed');return()=>undefined}
   let socket:WebSocket|undefined,retry:ReturnType<typeof setTimeout>|undefined,stopped=false,attempt=0;
   const connect=()=>{
     if(stopped)return;onStatus?.('connecting');socket=new WebSocket(serviceConfig.websocketUrl);

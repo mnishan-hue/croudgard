@@ -164,6 +164,12 @@ class EventLog(BaseModel):
     severity: Literal["INFO", "WARNING", "CRITICAL"] = "INFO"
     message: str
 
+class RiskSample(BaseModel):
+    timestamp: str = Field(default_factory=utc_now)
+    risk: float
+    intervention: bool = False
+
+
 
 class LiveSnapshot(BaseModel):
     timestamp: str = Field(default_factory=utc_now)
@@ -177,12 +183,20 @@ class LiveSnapshot(BaseModel):
     intervention: Intervention
     events: list[EventLog]
     risk_history: list[float]
+    risk_timeline: list[RiskSample] = Field(default_factory=list)
 
 
 class ScenarioRequest(BaseModel):
     scenario: str
     target_id: str | None = None
     timed: bool = False
+
+
+class PersonCountObservation(BaseModel):
+    camera_id: str
+    count: int = Field(ge=0, le=10000)
+    confidence: float = Field(ge=0, le=1)
+    captured_at: str = Field(default_factory=utc_now)
 
 
 class ManualControlRequest(BaseModel):
