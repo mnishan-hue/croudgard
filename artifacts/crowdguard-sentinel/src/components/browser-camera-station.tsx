@@ -15,6 +15,10 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
   const station = useBrowserCameras();
   const [open, setOpen] = useState(false);
   const enabled = cameras.filter((camera) => camera.enabled).slice(0, 3);
+  const selectedCount = enabled.filter(
+    (camera) => station.assignments[camera.id],
+  ).length;
+  const runningCount = Object.keys(station.streams).length;
   const busy = ["REQUESTING_PERMISSION", "LOADING_AI", "CONNECTING"].includes(
     station.status,
   );
@@ -37,12 +41,12 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
               {station.status === "RUNNING" && (
                 <span className="status-chip py-1 text-secondary">
                   <span className="status-pulse h-1.5 w-1.5 rounded-full bg-secondary" />
-                  3 cameras analyzing
+                  {runningCount} camera{runningCount === 1 ? "" : "s"} analyzing
                 </span>
               )}
             </div>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              Connect three USB cameras here. Person detection runs on this computer and sends annotated frames and measurements to CrowdGuard.
+              Connect one, two, or three USB cameras. Each active feed is analyzed independently and contributes to CrowdGuard.
             </p>
             {station.error && (
               <p className="mt-2 text-[10px] text-destructive">{station.error}</p>
@@ -60,7 +64,7 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
           ) : (
             <button type="button" className="button-primary" onClick={() => void configure()} disabled={busy}>
               {busy ? <LoaderCircle size={14} className="animate-spin" /> : <Camera size={14} />}
-              {busy ? "Preparing cameras…" : "Connect 3 cameras"}
+              {busy ? "Preparing cameras…" : "Connect cameras"}
             </button>
           )}
         </div>
@@ -72,7 +76,7 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
             <div className="flex items-start justify-between gap-4 border-b border-border p-5">
               <div>
                 <div className="data-mono text-[8px] text-secondary">DIRECT BROWSER CAPTURE</div>
-                <h2 className="mt-1 text-[18px] font-semibold">Connect three physical cameras</h2>
+                <h2 className="mt-1 text-[18px] font-semibold">Connect available physical cameras</h2>
                 <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
                   Assign a different device to each location. Keep this website open while monitoring; closing it stops browser analysis.
                 </p>
@@ -91,7 +95,7 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
                 <Waiting message="Opening all three camera feeds…" />
               ) : station.status === "RUNNING" ? (
                 <div className="grid gap-3 md:grid-cols-3">
-                  {enabled.map((camera) => (
+                  {enabled.filter((camera) => station.streams[camera.id]).map((camera) => (
                     <LocalPreview
                       key={camera.id}
                       camera={camera}
@@ -114,7 +118,7 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
                       <div className={`mb-4 flex items-center gap-2 border p-3 text-[10px] ${station.devices.length >= 3 ? "border-secondary/30 bg-secondary/5 text-secondary" : "border-primary/35 bg-primary/5 text-primary"}`}>
                         {station.devices.length >= 3 ? <CheckCircle2 size={15} /> : <TriangleAlert size={15} />}
                         {station.devices.length} physical camera{station.devices.length === 1 ? "" : "s"} detected
-                        {station.devices.length < 3 && " · Connect three separate cameras, then select Rescan."}
+                        {station.devices.length < 3 && " · You can start now and add more cameras later."}
                       </div>
                       <div className="grid gap-3 md:grid-cols-3">
                         {enabled.map((camera, index) => (
@@ -127,7 +131,7 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
                             onChange={(event) => station.setAssignment(camera.id, event.target.value)}
                             className="mt-4 w-full rounded-md border border-border bg-background px-3 py-2 text-[11px] text-foreground"
                           >
-                            <option value="">Select a physical camera</option>
+                            <option value="">Not connected</option>
                             {station.devices.map((device, deviceIndex) => (
                               <option
                                 key={device.deviceId}
@@ -172,8 +176,8 @@ export function BrowserCameraStation({ cameras }: { cameras: FacilityCamera[] })
                     <button type="button" className="button-secondary" onClick={() => void station.prepare(enabled)} disabled={busy}>
                       <RefreshCw size={12} /> Rescan
                     </button>
-                    <button type="button" className="button-primary" onClick={() => void station.start(enabled)} disabled={busy || station.devices.length < 3}>
-                      <CheckCircle2 size={13} /> Start all three
+                    <button type="button" className="button-primary" onClick={() => void station.start(enabled)} disabled={busy || selectedCount === 0}>
+                      <CheckCircle2 size={13} /> Start {selectedCount || "selected"} camera{selectedCount === 1 ? "" : "s"}
                     </button>
                   </>
                 )}

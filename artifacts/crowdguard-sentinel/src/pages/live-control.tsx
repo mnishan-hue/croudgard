@@ -168,7 +168,7 @@ export default function LiveControl() {
                 No live camera measurements yet
               </h2>
               <p className="mt-2 text-[12px] text-muted-foreground">
-                Connect three cameras above or start the configured edge
+                Connect one or more cameras above or start the configured edge
                 workers. Until current observations arrive, CrowdGuard
                 intentionally hides risk, people count, and exit recommendations.
               </p>

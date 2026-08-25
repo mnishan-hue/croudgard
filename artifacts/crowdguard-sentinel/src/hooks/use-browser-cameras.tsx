@@ -320,15 +320,11 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const start = useCallback(
     async (cameras: Camera[]) => {
       const enabled = cameras.filter((camera) => camera.enabled).slice(0, 3);
-      const selected = enabled.map((camera) => assignments[camera.id]);
-      if (enabled.length !== 3) {
+      const selectedCameras = enabled.filter((camera) => assignments[camera.id]);
+      const selected = selectedCameras.map((camera) => assignments[camera.id]);
+      if (!selectedCameras.length) {
         setStatus("ERROR");
-        setError("Exactly three enabled facility cameras are required.");
-        return;
-      }
-      if (selected.some((deviceId) => !deviceId)) {
-        setStatus("ERROR");
-        setError("Select a physical camera for each CrowdGuard camera.");
+        setError("Select at least one physical camera to start monitoring.");
         return;
       }
       if (new Set(selected).size !== selected.length) {
@@ -343,7 +339,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         const model = await loadPersonModel();
         setStatus("CONNECTING");
         const runtimes: RuntimeCamera[] = [];
-        for (const camera of enabled) {
+        for (const camera of selectedCameras) {
           const deviceId = assignments[camera.id];
           const stream = await navigator.mediaDevices.getUserMedia({
             video: {
