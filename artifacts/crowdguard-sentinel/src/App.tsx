@@ -24,10 +24,8 @@ const queryClient = new QueryClient();
 
 function Router() {
   return (
-    // Keep a shared shell (sidebar, navbar) outside the boundary so it
-    // survives a page crash.
-    <RoutedErrorBoundary>
-      <SentinelShell>
+    <SentinelShell>
+      <RoutedErrorBoundary>
         <Suspense fallback={<div className="panel grid min-h-64 place-items-center data-mono text-[10px] text-muted-foreground">LOADING OPERATIONS MODULE</div>}>
           <Switch>
             <Route path="/" component={LiveControl} />
@@ -40,8 +38,8 @@ function Router() {
             <Route component={NotFound} />
           </Switch>
         </Suspense>
-      </SentinelShell>
-    </RoutedErrorBoundary>
+      </RoutedErrorBoundary>
+    </SentinelShell>
   );
 }
 

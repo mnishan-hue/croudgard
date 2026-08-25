@@ -1,52 +1,66 @@
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Camera, CircleCheck, CircleOff, MapPin, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'wouter';
 import { PageIntro, Panel } from '@/components/sentinel-shell';
 import { TeachableCamera } from '@/components/teachable-camera';
 import { useSentinel } from '@/hooks/use-sentinel';
 
 export default function CameraDetail() {
-  const { cameraId = '' } = useParams<{cameraId:string}>();
+  const params = useParams<{cameraId:string}>();
+  const cameraId = params?.cameraId ?? '';
   const { snapshot, refresh } = useSentinel();
-  const camera=snapshot?.facility.cameras.find((item)=>item.id===decodeURIComponent(cameraId));
-  const zones=snapshot?.facility.zones.filter((zone)=>camera?.zone_ids.includes(zone.id))??[];
+  const camera=snapshot?.facility.cameras.find((item)=>item.id===safeDecode(cameraId));
+  const zones=snapshot?.facility.zones.filter((zone)=>camera?.zone_ids?.includes(zone.id))??[];
   const primary=[...zones].sort((a,b)=>b.risk-a.risk)[0];
 
   if(!snapshot)return <div className="panel grid min-h-64 place-items-center p-8 text-center"><div><div className="data-mono text-[11px] text-primary">BACKEND OFFLINE</div><button onClick={()=>void refresh()} className="mt-4 border border-primary/40 px-3 py-2 data-mono text-[9px] text-primary">RETRY</button></div></div>;
   if(!camera)return <div className="panel grid min-h-64 place-items-center p-8 text-center"><div><div className="data-mono text-[11px] text-destructive">CAMERA NOT FOUND</div><Link href="/cameras" className="mt-4 inline-flex border border-primary/40 px-3 py-2 data-mono text-[9px] text-primary">BACK TO CAMERA GRID</Link></div></div>;
 
   const metrics=primary?.metrics;
-  const values=[
-    ['CURRENT CLASSIFICATION',primary?.crowd_state??'NO DATA'],
-    ['PEOPLE COUNT',String(metrics?.people_count??'—')],
-    ['DENSITY',metrics?`${Math.round(metrics.density)}%`:'—'],
-    ['AVERAGE SPEED',metrics?`${metrics.average_speed.toFixed(2)} m/s`:'—'],
-    ['DIRECTION',metrics?.direction_conflict&&metrics.direction_conflict>35?'CONFLICTING':'PRIMARY FLOW'],
-    ['INFLOW',metrics?`${Math.round(metrics.inflow)} / min`:'—'],
-    ['OUTFLOW',metrics?`${Math.round(metrics.outflow)} / min`:'—'],
-    ['STOPPED',metrics?`${Math.round(metrics.stopped_percentage)}%`:'—'],
-    ['QUEUE GROWTH',metrics?`${metrics.queue_growth.toFixed(2)} / min`:'—'],
-    ['DIRECTION CONFLICT',metrics?`${Math.round(metrics.direction_conflict)}%`:'—'],
-    ['RIPPLE SCORE',metrics?`${Math.round(metrics.ripple_score)} / 100`:'—'],
-    ['RISK',primary?`${Math.round(primary.risk)} / 100`:'—'],
+  const values:[string,string,string?][]=[
+    ['Crowd condition',humanize(primary?.crowd_state??'NO DATA')],
+    ['People detected',formatNumber(metrics?.people_count)],
+    ['Area density',formatNumber(metrics?.density,'%')],
+    ['Average walking speed',formatNumber(metrics?.average_speed,' m/s',2)],
+    ['Flow direction',numberOrNull(metrics?.direction_conflict)!==null&&numberOrNull(metrics?.direction_conflict)!>35?'Conflicting':'Mostly consistent'],
+    ['People entering',formatNumber(metrics?.inflow,' / min')],
+    ['People leaving',formatNumber(metrics?.outflow,' / min')],
+    ['People stopped',formatNumber(metrics?.stopped_percentage,'%')],
+    ['Queue change',formatNumber(metrics?.queue_growth,' / min',2)],
+    ['Direction conflict',formatNumber(metrics?.direction_conflict,'%')],
+    ['Ripple score',formatNumber(metrics?.ripple_score,' / 100')],
+    ['Current risk',formatNumber(primary?.risk,' / 100')],
   ];
 
+  const online=camera.enabled&&camera.status==='ONLINE';
+
   return <div className="enter-rise">
-    <PageIntro eyebrow="02 / CAMERA DETAIL" title={camera.name} description={`${camera.id} · ${camera.camera_type} · ${camera.source}`} action={<Link href="/cameras" className="flex items-center gap-2 border border-border px-3 py-2 data-mono text-[9px] text-muted-foreground"><ArrowLeft size={13}/> CAMERA GRID</Link>}/>
+    <PageIntro eyebrow="Camera monitoring" title={camera.name} description="Review this camera's live AI analysis, coverage area, and current crowd conditions in one place." action={<Link href="/cameras" className="button-secondary"><ArrowLeft size={14}/> All cameras</Link>}/>
+    <div className="mb-5 grid gap-3 sm:grid-cols-3">
+      <Summary icon={online?CircleCheck:CircleOff} label="Camera status" value={online?'Online and ready':camera.enabled?humanize(camera.status):'Disabled'} tone={online?'good':'bad'}/>
+      <Summary icon={MapPin} label="Coverage" value={zones.map((zone)=>zone.name).join(', ')||'No zone assigned'}/>
+      <Summary icon={ShieldCheck} label="AI analysis" value={camera.ai_enabled?humanize(snapshot.ai_mode):'Disabled'} tone={camera.ai_enabled?'good':'neutral'}/>
+    </div>
     <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-      <Panel title="Camera feed" eyebrow={camera.status==='ONLINE'&&camera.enabled?'LOCAL MODEL READY':'CAMERA DISABLED'}>
+      <Panel title="Live camera analysis" eyebrow={online?'READY TO START':'CAMERA UNAVAILABLE'}>
         <TeachableCamera cameraId={camera.id}/>
       </Panel>
-      <Panel title="Camera health" eyebrow="CONFIGURATION AND PROVIDER">
+      <Panel title="Camera information" eyebrow="SETUP AND COVERAGE">
         <div className="divide-y divide-border">{[
-          ['STATUS',camera.enabled?camera.status:'DISABLED'],
-          ['AI MODE',camera.ai_enabled?snapshot.ai_mode:'AI DISABLED'],
-          ['AI PROVIDER',snapshot.ai_provider],
-          ['AI CONFIDENCE',snapshot.prediction.simulated?`${Math.round(snapshot.prediction.confidence)}% · SIMULATED`:`${Math.round(snapshot.prediction.confidence)}%`],
-          ['ASSIGNED ZONES',zones.map((zone)=>zone.name).join(', ')||'UNASSIGNED'],
-          ['SOURCE',camera.source],
+          ['Camera ID',camera.id],
+          ['Camera type',humanize(camera.camera_type)],
+          ['AI provider',snapshot.ai_provider||'Not reported'],
+          ['AI confidence',`${formatNumber(snapshot.prediction?.confidence,'%')}${snapshot.prediction?.simulated?' · simulated':''}`],
+          ['Assigned zones',zones.map((zone)=>zone.name).join(', ')||'Unassigned'],
+          ['Video source',camera.source||'Not configured'],
         ].map(([label,value])=><div key={label} className="p-4"><div className="data-mono text-[8px] text-muted-foreground">{label}</div><div className="mt-2 break-words text-[11px] text-foreground">{value}</div></div>)}</div>
       </Panel>
     </div>
-    <Panel title="Current zone metrics" eyebrow="BACKEND SNAPSHOT" className="mt-5"><div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">{values.map(([label,value])=><div key={label} className="bg-card p-4"><div className="data-mono text-[8px] text-muted-foreground">{label}</div><div className="data-mono mt-2 text-[13px] text-foreground">{value}</div></div>)}</div></Panel>
+    <Panel title="Current crowd conditions" eyebrow={primary?`LIVE DATA · ${primary.name}`:'NO ZONE DATA'} className="mt-5"><div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">{values.map(([label,value])=><div key={label} className="bg-card p-4"><div className="text-[10px] text-muted-foreground">{label}</div><div className="data-mono mt-2 text-[14px] font-semibold text-foreground">{value}</div></div>)}</div></Panel>
   </div>;
 }
+
+function numberOrNull(value:unknown){const result=typeof value==='number'?value:Number(value);return Number.isFinite(result)?result:null}
+function formatNumber(value:unknown,suffix='',digits=0){const result=numberOrNull(value);return result===null?'—':`${result.toFixed(digits)}${suffix}`}
+function humanize(value:string){return value.replaceAll('_',' ').toLowerCase().replace(/^./,(letter)=>letter.toUpperCase())}
+function safeDecode(value:string){try{return decodeURIComponent(value)}catch{return value}}
+function Summary({icon:Icon,label,value,tone='neutral'}:{icon:typeof Camera;label:string;value:string;tone?:'good'|'bad'|'neutral'}){return <div className="panel flex items-center gap-3 p-4"><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${tone==='good'?'bg-secondary/10 text-secondary':tone==='bad'?'bg-destructive/10 text-destructive':'bg-primary/10 text-primary'}`}><Icon size={19}/></span><div className="min-w-0"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-1 truncate text-[13px] font-semibold">{value}</div></div></div>}

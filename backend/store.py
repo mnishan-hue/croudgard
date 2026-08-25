@@ -20,6 +20,7 @@ class SQLiteStore:
             for facility in default_facilities(): self.save_facility(facility)
         if self.get_setting("active_facility") is None: self.set_setting("active_facility", "competition_prototype")
         if self.get_setting("automatic_control") is None: self.set_setting("automatic_control", "true")
+        if self.get_setting("current_scenario") is None: self.set_setting("current_scenario", "EXIT_A_CONGESTION")
 
     def list_facilities(self):
         return [Facility.model_validate_json(row["data"]) for row in self.connection.execute("SELECT data FROM facilities ORDER BY id")]
@@ -49,4 +50,10 @@ class SQLiteStore:
 
     def reset(self):
         self.connection.execute("DELETE FROM facilities")
+        self.connection.execute("DELETE FROM events")
+        self.connection.execute("DELETE FROM settings")
+        self.connection.commit()
         for facility in default_facilities(): self.save_facility(facility)
+        self.set_setting("active_facility", "competition_prototype")
+        self.set_setting("automatic_control", "true")
+        self.set_setting("current_scenario", "NORMAL")

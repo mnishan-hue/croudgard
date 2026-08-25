@@ -184,6 +184,9 @@ class LiveSnapshot(BaseModel):
     events: list[EventLog]
     risk_history: list[float]
     risk_timeline: list[RiskSample] = Field(default_factory=list)
+    current_scenario: str = "EXIT_A_CONGESTION"
+    demo_environment: bool = True
+    events_acknowledged_at: str | None = None
 
 
 class ScenarioRequest(BaseModel):
@@ -195,6 +198,13 @@ class ScenarioRequest(BaseModel):
 class PersonCountObservation(BaseModel):
     camera_id: str
     count: int = Field(ge=0, le=10000)
+    confidence: float = Field(ge=0, le=1)
+    captured_at: str = Field(default_factory=utc_now)
+
+
+class CrowdClassificationObservation(BaseModel):
+    camera_id: str
+    classification: Literal["LOW_OR_EMPTY", "NORMAL_FLOW", "BUILDING_CONGESTION", "HIGH_CONGESTION"]
     confidence: float = Field(ge=0, le=1)
     captured_at: str = Field(default_factory=utc_now)
 

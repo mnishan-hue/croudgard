@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, Aperture, Bot, Camera, ChevronDown, Cpu, FileClock, GitFork, LayoutDashboard, Menu, RadioTower, ShieldCheck, X } from 'lucide-react';
-import { scenarios, type Scenario, type Severity } from '@/lib/sentinel';
+import { Activity, Bot, Camera, ChevronDown, Cpu, FileClock, GitFork, LayoutDashboard, Menu, RadioTower, ShieldCheck, X } from 'lucide-react';
+import { type Severity } from '@/lib/sentinel';
 import { useSentinel } from '@/hooks/use-sentinel';
 
 const nav = [
@@ -17,6 +17,8 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [location] = useLocation();
   const { state, snapshot, facilities, selectFacility, connection, error } = useSentinel();
+  const activeEvents=snapshot?.events.filter((item)=>item.severity!=='INFO').length??0;
+  const currentPage=location.startsWith('/cameras/')?'Camera detail':location === '/' ? 'Live overview' : nav.find((item) => item.href === location)?.label ?? 'Operations';
   return (
     <div className="noise min-h-[100dvh] bg-background">
       <aside className={`${mobileOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-[246px] flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 lg:translate-x-0`}>
@@ -33,7 +35,7 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="flex-1 space-y-1 px-3 py-5">
           <p className="data-mono mb-3 px-3 text-[9px] uppercase tracking-[.18em] text-muted-foreground">Operations</p>
-          {nav.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`group flex items-center gap-3 border-l-2 px-3 py-2.5 text-[12px] font-medium transition-colors ${location === href ? 'border-primary bg-primary/10 text-primary' : 'border-transparent text-sidebar-foreground/65 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-foreground'}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`}><Icon size={16} strokeWidth={1.8} /><span>{label}</span>{label === 'Event Log' && <span className="data-mono ml-auto rounded-sm bg-destructive/15 px-1.5 py-0.5 text-[9px] text-destructive">5</span>}</Link>)}
+          {nav.map(({ href, label, icon: Icon }) => {const active=href==='/'?location===href:location===href||location.startsWith(`${href}/`);return <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`group flex items-center gap-3 rounded-r-md border-l-2 px-3 py-2.5 text-[12px] font-medium transition-colors ${active ? 'border-primary bg-primary/10 text-primary' : 'border-transparent text-sidebar-foreground/65 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-foreground'}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`}><Icon size={16} strokeWidth={1.8} /><span>{label}</span>{label === 'Event Log' && activeEvents>0 && <span className="data-mono ml-auto rounded-full bg-destructive/15 px-2 py-0.5 text-[9px] text-destructive">{activeEvents}</span>}</Link>})}
           <p className="data-mono mb-3 mt-8 px-3 text-[9px] uppercase tracking-[.18em] text-muted-foreground">System</p>
           <div className="flex items-center gap-3 px-3 py-2 text-[11px] text-sidebar-foreground/65"><RadioTower size={15} className={connection==='open'?'text-secondary':'text-primary'} /> <span>{error?'Backend offline':connection==='open'?'Live telemetry':'Reconnecting'}</span><span className={`ml-auto h-1.5 w-1.5 rounded-full ${connection==='open'?'bg-secondary status-pulse':'bg-primary'}`} /></div>
         </nav>
@@ -42,7 +44,7 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
       {mobileOpen && <button className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close menu" data-testid="button-overlay-navigation" />}
       <div className="lg:pl-[246px]">
         <header className="sticky top-0 z-30 flex h-[76px] items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur-md sm:px-7">
-          <div className="flex items-center gap-3"><button className="text-muted-foreground lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu size={20} /></button><div><div className="data-mono text-[9px] uppercase tracking-[.2em] text-muted-foreground">LOCAL OPERATIONS CONTROL</div><div className="mt-1 text-[13px] font-semibold text-foreground">{location === '/' ? 'Live Control' : nav.find((item) => item.href === location)?.label ?? 'Operations'}</div></div></div>
+          <div className="flex items-center gap-3"><button className="text-muted-foreground lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu size={20} /></button><div><div className="data-mono text-[9px] uppercase tracking-[.2em] text-muted-foreground">CROWD SAFETY OPERATIONS</div><div className="mt-1 text-[13px] font-semibold text-foreground">{currentPage}</div></div></div>
           <div className="flex items-center gap-2 sm:gap-5">
             <div className="hidden items-center gap-3 xl:flex">
               <HeaderStatus label="Data source" value={connection==='open' ? 'LIVE BACKEND' : 'RECONNECTING'} tone={connection==='open' ? 'teal' : 'amber'} />
@@ -50,10 +52,11 @@ export function SentinelShell({ children }: { children: React.ReactNode }) {
               <HeaderStatus label="Sentinel link" value={state.system.esp32} tone="teal" />
               <HeaderStatus label="Emergency" value={state.system.emergencyStatus} tone={state.system.emergencyStatus === 'CLEAR' ? 'teal' : 'red'} />
             </div>
-            <div className="hidden items-center gap-2 border-l border-border pl-3 text-right sm:flex sm:pl-5"><span className="data-mono text-[10px] text-muted-foreground">{state.system.timestamp} UTC</span><span className="h-1.5 w-1.5 rounded-full bg-secondary status-pulse" /></div>
+            <div className="hidden items-center gap-2 border-l border-border pl-3 text-right sm:flex sm:pl-5"><span className="data-mono text-[10px] text-muted-foreground">{state.system.timestamp} LOCAL</span><span className="h-1.5 w-1.5 rounded-full bg-secondary status-pulse" /></div>
             <div className="flex items-center gap-2 border-l border-border pl-3 sm:pl-5"><span className="grid h-7 w-7 place-items-center rounded-full border border-secondary/40 bg-secondary/10 text-[10px] font-bold text-secondary">OP</span><span className="hidden text-[11px] font-medium sm:block">Operator / 04</span></div>
           </div>
         </header>
+        {snapshot?.demo_environment&&<div className="border-b border-primary/25 bg-primary/[.07] px-4 py-2 text-center text-[10px] text-primary sm:px-7"><strong>Demo environment:</strong> crowd conditions, AI recommendations, people counts, and hardware responses are simulated.</div>}
         <main className="mx-auto max-w-[1600px] px-4 py-5 sm:px-7 sm:py-7">{children}</main>
       </div>
     </div>
@@ -68,12 +71,7 @@ function HeaderStatus({ label, value, tone }: { label: string; value: string; to
 }
 
 export function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
-  return <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="data-mono mb-2 text-[10px] uppercase tracking-[.22em] text-primary">{eyebrow}</div><h1 className="text-[26px] font-semibold tracking-[-.04em] text-foreground sm:text-[32px]">{title}</h1><p className="mt-2 max-w-[650px] text-[12px] leading-relaxed text-muted-foreground">{description}</p></div>{action}</div>;
-}
-
-export function ScenarioControls() {
-  const { scenario, setScenario } = useSentinel();
-  return <section className="panel mb-6 flex flex-col gap-4 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4"><div className="flex items-center gap-3"><div className="grid h-8 w-8 place-items-center border border-primary/40 bg-primary/10 text-primary"><Aperture size={15} /></div><div><div className="text-[11px] font-semibold">Demo Controls</div><div className="data-mono text-[9px] text-muted-foreground">SIMULATION STATE · LOCAL ONLY</div></div></div><div className="flex min-w-0 flex-1 flex-wrap justify-start gap-1.5 sm:justify-end">{scenarios.map((item) => <button key={item.id} onClick={() => setScenario(item.id)} className={`min-w-[104px] border px-2.5 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${scenario === item.id ? 'border-primary/70 bg-primary/15 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/35 hover:bg-muted'}`} data-testid={`button-scenario-${item.id}`} aria-pressed={scenario === item.id}><span className="block text-[10px] font-semibold">{item.label}</span><span className="data-mono mt-0.5 block text-[8px] opacity-65">{item.short}</span></button>)}</div></section>;
+  return <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="data-mono mb-2 text-[10px] uppercase tracking-[.18em] text-primary">{eyebrow}</div><h1 className="text-[28px] font-semibold tracking-[-.035em] text-foreground sm:text-[34px]">{title}</h1><p className="mt-2 max-w-[720px] text-[13px] leading-relaxed text-muted-foreground">{description}</p></div>{action}</div>;
 }
 
 export function Panel({ title, eyebrow, children, className = '', action }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {

@@ -38,6 +38,43 @@ def test_person_count_rejects_unknown_camera(tmp_path):
     assert response.status_code == 422
 
 
+def test_person_count_rejects_low_confidence_and_stale_observations(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    api = client(tmp_path)
+    assert api.post("/api/ai/person-count", json={"camera_id":"cam_main","count":9,"confidence":.3}).status_code == 422
+    stale=(datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat()
+    assert api.post("/api/ai/person-count", json={"camera_id":"cam_main","count":9,"confidence":.9,"captured_at":stale}).status_code == 422
+
+
+def test_overlapping_camera_counts_are_smoothed_without_double_counting(tmp_path):
+    api = client(tmp_path)
+    facility=api.get("/api/system").json()["facility"]
+    camera={"id":"cam_overlap","facility_id":facility["id"],"name":"Overlap Camera","zone_ids":["zone_main"]}
+    assert api.post("/api/cameras",json=camera).status_code==201
+    assert api.post("/api/ai/person-count",json={"camera_id":"cam_main","count":12,"confidence":.9}).status_code==200
+    assert api.post("/api/ai/person-count",json={"camera_id":"cam_overlap","count":10,"confidence":.8}).status_code==200
+    zone=next(item for item in api.get("/api/system").json()["facility"]["zones"] if item["id"]=="zone_main")
+    assert zone["metrics"]["people_count"]==12
+    assert zone["metrics"]["confidence"]==85
+
+
+def test_camera_classification_updates_zone_risk_and_exit_decision(tmp_path):
+    api=client(tmp_path)
+    response=api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.92})
+    assert response.status_code==200
+    assert response.json()["smoothed_risk"]==86
+    snapshot=api.get("/api/system").json()
+    zone=next(item for item in snapshot["facility"]["zones"] if item["id"]=="zone_exit_a")
+    assert zone["risk"]==86 and zone["metrics"]["confidence"]==92
+    assert snapshot["decision"]["recommended_exit_id"]=="exit_b"
+
+
+def test_camera_classification_rejects_weak_and_unknown_observations(tmp_path):
+    api=client(tmp_path)
+    assert api.post("/api/ai/crowd-observation",json={"camera_id":"cam_main","classification":"NORMAL_FLOW","confidence":.4}).status_code==422
+    assert api.post("/api/ai/crowd-observation",json={"camera_id":"missing","classification":"NORMAL_FLOW","confidence":.9}).status_code==422
+
+
 def test_dynamic_camera_and_exit(tmp_path):
     api=client(tmp_path); facility=api.get("/api/system").json()["facility"]
     camera={"id":"cam_extra","facility_id":facility["id"],"name":"Extra Camera","zone_ids":["zone_main"]}
@@ -183,3 +220,15 @@ def test_vercel_cors_preflight(tmp_path):
     response=api.options("/api/health",headers={"Origin":"https://crowdguard-demo.vercel.app","Access-Control-Request-Method":"GET"})
     assert response.status_code==200
     assert response.headers["access-control-allow-origin"]=="https://crowdguard-demo.vercel.app"
+
+
+def test_demo_state_is_synchronized_resettable_and_acknowledged(tmp_path):
+    api=client(tmp_path)
+    state=api.post("/api/demo/scenario",json={"scenario":"CRITICAL_STATE"}).json()
+    assert state["current_scenario"]=="CRITICAL_STATE"
+    acknowledged=api.post("/api/events/acknowledge").json()["acknowledged_at"]
+    assert api.get("/api/system").json()["events_acknowledged_at"]==acknowledged
+    reset=api.post("/api/demo/reset").json()
+    assert reset["current_scenario"]=="NORMAL"
+    assert reset["prediction"]["risk"]==20
+    assert reset["automatic_control"] is True

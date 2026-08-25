@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, ScenarioRequest, Sentinel, Zone
+from backend.models import AutoControlRequest, Camera, CrowdClassificationObservation, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, ScenarioRequest, Sentinel, Zone, utc_now
 from backend.service import CrowdGuardService, SCENARIOS
 from backend.store import SQLiteStore
 
@@ -77,6 +77,17 @@ def scenario(request: ScenarioRequest):
     except ValueError as exc: raise HTTPException(422, str(exc)) from exc
 
 
+@app.post("/api/demo/reset")
+def reset_demo(): return service.reset_demo()
+
+
+@app.post("/api/events/acknowledge")
+def acknowledge_events():
+    timestamp=utc_now(); store.set_setting("events_acknowledged_at",timestamp)
+    store.add_event(EventLog(category="SYSTEM",message="Operator acknowledged the event queue"))
+    return {"acknowledged_at":timestamp}
+
+
 def active():
     facility = service.facility
     if not facility: raise HTTPException(500, "FACILITY CONFIG ERROR")
@@ -87,6 +98,14 @@ def active():
 def person_count(observation: PersonCountObservation):
     try:
         return service.record_person_count(observation)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/ai/crowd-observation")
+def crowd_observation(observation: CrowdClassificationObservation):
+    try:
+        return service.record_crowd_observation(observation)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
