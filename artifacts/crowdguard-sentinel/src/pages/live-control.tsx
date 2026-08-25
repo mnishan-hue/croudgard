@@ -24,7 +24,6 @@ import { MapPanel, PageIntro, Panel } from "@/components/sentinel-shell";
 import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
 import type { BackendSnapshot } from "@/types/sentinel";
-import { TeachableCamera } from "@/components/teachable-camera";
 import { LiveCameraGrid } from "@/components/live-camera-grid";
 
 export default function LiveControl() {
@@ -85,10 +84,6 @@ export default function LiveControl() {
         : "STABLE";
   const critical = prediction.risk >= 90;
   const hasLiveAI = snapshot.camera_ai_active;
-  const liveCamera = facility.cameras.find(
-    (camera) =>
-      camera.enabled && camera.ai_enabled && camera.status === "ONLINE",
-  );
 
   async function toggleAutomatic() {
     setControlBusy(true);
@@ -109,7 +104,7 @@ export default function LiveControl() {
       <PageIntro
         eyebrow="Live safety overview"
         title="Crowd operations"
-        description={`Start the camera below to generate live people counts, crowd classification, risk, and exit guidance for ${facility.name}.`}
+        description={`Monitor all camera workers together while CrowdGuard combines their detections into one facility decision for ${facility.name}.`}
         action={
           <div
             className={`status-chip ${hasLiveAI ? "text-secondary" : "text-primary"}`}
@@ -171,9 +166,9 @@ export default function LiveControl() {
                 No live camera measurements yet
               </h2>
               <p className="mt-2 text-[12px] text-muted-foreground">
-                Start live analysis below. Until the camera reports, CrowdGuard
-                intentionally hides risk, people count, and exit
-                recommendations.
+                Start the configured camera workers. Until current observations
+                arrive, CrowdGuard intentionally hides risk, people count, and
+                exit recommendations.
               </p>
             </div>
           </div>
@@ -229,20 +224,7 @@ export default function LiveControl() {
           }
         />
       </div>
-      {liveCamera && (
-        <Panel
-          title="Live camera AI"
-          eyebrow={
-            hasLiveAI
-              ? "REPORTING TO CROWDGUARD"
-              : "START ANALYSIS TO CREATE LIVE DATA"
-          }
-          className="mb-5"
-        >
-          <TeachableCamera cameraId={liveCamera.id} />
-        </Panel>
-      )}
-      <Panel title="Camera network" eyebrow={`${snapshot.reporting_camera_ids.length} OF ${facility.cameras.filter((camera)=>camera.enabled).length} REPORTING`} className="mb-5">
+      <Panel title="Live camera network" eyebrow={`${snapshot.streaming_camera_ids?.length ?? 0} VIDEO · ${snapshot.reporting_camera_ids.length} AI · ${facility.cameras.filter((camera)=>camera.enabled).length} CONFIGURED`} className="mb-5">
         <div className="p-3"><LiveCameraGrid snapshot={snapshot}/></div>
       </Panel>
       <div

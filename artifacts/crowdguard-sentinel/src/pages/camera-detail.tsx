@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { Link, useParams } from "wouter";
 import { PageIntro, Panel } from "@/components/sentinel-shell";
-import { TeachableCamera } from "@/components/teachable-camera";
+import { CameraStream } from "@/components/camera-stream";
 import { useSentinel } from "@/hooks/use-sentinel";
 
 export default function CameraDetail() {
@@ -59,6 +59,7 @@ export default function CameraDetail() {
 
   const metrics = primary?.metrics;
   const reporting = snapshot.reporting_camera_ids.includes(camera.id);
+  const streaming = snapshot.streaming_camera_ids?.includes(camera.id) ?? false;
   const values: [string, string, string?][] = [
     ["Crowd condition", reporting?humanize(primary?.crowd_state ?? "NO DATA"):"—"],
     ["People detected", reporting?formatNumber(metrics?.people_count):"—"],
@@ -95,8 +96,12 @@ export default function CameraDetail() {
           icon={online ? CircleCheck : CircleOff}
           label="Camera status"
           value={
-            reporting
-              ? "Reporting live metrics"
+            reporting && streaming
+              ? "Video and AI reporting"
+              : reporting
+                ? "AI reporting · video unavailable"
+              : streaming
+                ? "Video streaming · AI waiting"
               : online
                 ? "Configured · waiting for worker"
               : camera.enabled
@@ -121,10 +126,15 @@ export default function CameraDetail() {
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
         <Panel
-          title="Live camera analysis"
-          eyebrow={online ? "READY TO START" : "CAMERA UNAVAILABLE"}
+          title="Live annotated footage"
+          eyebrow={streaming ? "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR EDGE WORKER" : "CAMERA UNAVAILABLE"}
         >
-          <TeachableCamera cameraId={camera.id} />
+          <CameraStream cameraId={camera.id} cameraName={camera.name} streaming={streaming} />
+          <p className="border-t border-border p-3 text-[9px] leading-relaxed text-muted-foreground">
+            Detection overlays are produced by YOLO and ByteTrack. The backend
+            keeps only the newest frame in memory and does not write footage to
+            disk.
+          </p>
         </Panel>
         <Panel title="Camera information" eyebrow="SETUP AND COVERAGE">
           <div className="divide-y divide-border">

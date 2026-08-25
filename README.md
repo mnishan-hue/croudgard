@@ -52,6 +52,15 @@ C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_a --s
 C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_b --source 2 --counting-line-y 0.55 --preview
 ```
 
+Or start all three from one configuration file:
+
+```powershell
+Copy-Item docs\cameras.example.json cameras.local.json
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.multi_worker --config cameras.local.json --api http://127.0.0.1:8000/api
+```
+
+Every worker publishes annotated footage and current metrics. Live Control displays all active feeds simultaneously; FastAPI keeps only the newest JPEG per camera in memory and does not write video to disk. Decisions are finalized only when all enabled exits have fresh camera observations.
+
 Sources may be webcam/USB indices, RTSP URLs, or local video paths. See [AI pipeline](docs/AI_PIPELINE.md), [camera setup](docs/CAMERA_SETUP.md), [crowd metrics](docs/CROWD_METRICS.md), and [ESP32 protocol](docs/ESP32_PROTOCOL.md).
 
 ## Live data and facilities

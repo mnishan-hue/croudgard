@@ -38,6 +38,7 @@ backend/*.db-wal
 .env
 .env.*
 !.env.example
+cameras.local.json
 /.sass-cache
 /connect.lock
 /coverage

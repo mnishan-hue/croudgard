@@ -125,6 +125,7 @@ export interface BackendSnapshot {
   events_acknowledged_at: string | null;
   camera_ai_active: boolean;
   reporting_camera_ids: string[];
+  streaming_camera_ids: string[];
   exit_coverage_complete: boolean;
   prediction: {
     provider: string;

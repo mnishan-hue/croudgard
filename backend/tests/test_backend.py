@@ -100,6 +100,50 @@ def test_single_high_cv_frame_does_not_trigger_intervention(tmp_path):
     assert response["snapshot"]["decision"]["action"]=="NORMAL"
 
 
+def test_camera_frames_are_validated_streamed_and_memory_only(tmp_path):
+    api=client(tmp_path)
+    jpeg=b"\xff\xd8crowdguard-frame\xff\xd9"
+    assert api.post("/api/cameras/cam_main/frame",content=jpeg,headers={"Content-Type":"text/plain"}).status_code==415
+    assert api.post("/api/cameras/cam_main/frame",content=b"not-a-jpeg",headers={"Content-Type":"image/jpeg"}).status_code==422
+    accepted=api.post("/api/cameras/cam_main/frame",content=jpeg,headers={"Content-Type":"image/jpeg"})
+    assert accepted.status_code==202
+    assert accepted.json()["sequence"]==1
+    assert "cam_main" in api.get("/api/system").json()["streaming_camera_ids"]
+    frame=api.get("/api/cameras/cam_main/frame.jpg")
+    assert frame.status_code==200 and frame.content==jpeg
+    assert frame.headers["cache-control"]=="no-store, max-age=0"
+    cleared=api.post("/api/system/clear-live-data").json()
+    assert cleared["streaming_camera_ids"]==[]
+    assert api.get("/api/cameras/cam_main/frame.jpg").status_code==404
+
+
+def test_camera_frame_rejects_unknown_camera(tmp_path):
+    api=client(tmp_path)
+    jpeg=b"\xff\xd8frame\xff\xd9"
+    assert api.post("/api/cameras/missing/frame",content=jpeg,headers={"Content-Type":"image/jpeg"}).status_code==404
+
+
+def test_concurrent_camera_ingest_and_snapshots_are_thread_safe(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    api=client(tmp_path)
+    jpeg=b"\xff\xd8concurrent-frame\xff\xd9"
+    observation={"people_count":3,"tracked_people":3,"detection_confidence":.9,"fps":18,"density_score":22,"occupied_area_ratio":.1,"congestion_score":25,"risk_score":28}
+
+    def update(index):
+        camera=["cam_main","cam_exit_a","cam_exit_b"][index%3]
+        frame=api.post(f"/api/cameras/{camera}/frame",content=jpeg,headers={"Content-Type":"image/jpeg"})
+        metrics=api.post("/api/ai/cv-observation",json={"camera_id":camera,**observation})
+        snapshot=api.get("/api/system")
+        return frame.status_code,metrics.status_code,snapshot.status_code
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results=list(executor.map(update,range(30)))
+    assert set(results)=={(202,200,200)}
+    snapshot=api.get("/api/system").json()
+    assert set(snapshot["streaming_camera_ids"])=={"cam_main","cam_exit_a","cam_exit_b"}
+
+
 def test_cv_exit_flow_is_used_by_route_ranking(tmp_path):
     api=client(tmp_path)
     crowded={"people_count":18,"tracked_people":18,"detection_confidence":.9,"fps":20,"density_score":65,"occupied_area_ratio":.4,"congestion_score":70,"risk_score":70}

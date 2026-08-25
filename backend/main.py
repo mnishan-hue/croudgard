@@ -4,8 +4,8 @@ import asyncio
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
@@ -16,6 +16,7 @@ DB_PATH = os.getenv("CROWDGUARD_DB_PATH", str(Path(__file__).parent / "crowdguar
 store = SQLiteStore(DB_PATH)
 service = CrowdGuardService(store)
 app = FastAPI(title="CrowdGuard Sentinel API", version="1.0.0")
+MAX_CAMERA_FRAME_BYTES = 1_500_000
 local_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 configured_origins = [origin.strip().rstrip("/") for origin in os.getenv("CROWDGUARD_CORS_ORIGINS", "").split(",") if origin.strip()]
 origin_regex = os.getenv("CROWDGUARD_CORS_ORIGIN_REGEX", r"^https://[a-zA-Z0-9-]+\.vercel\.app$")
@@ -109,6 +110,58 @@ def cv_observation(observation: ComputerVisionObservation):
 def cameras(): return active().cameras
 
 
+@app.post("/api/cameras/{camera_id}/frame", status_code=202)
+async def camera_frame(camera_id: str, request: Request):
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type != "image/jpeg":
+        raise HTTPException(415, "Camera frames must use image/jpeg")
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_CAMERA_FRAME_BYTES:
+                raise HTTPException(413, "Camera frame exceeds the 1.5 MB limit")
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid Content-Length header") from exc
+    data = await request.body()
+    if len(data) > MAX_CAMERA_FRAME_BYTES:
+        raise HTTPException(413, "Camera frame exceeds the 1.5 MB limit")
+    try:
+        return service.record_camera_frame(camera_id, data)
+    except ValueError as exc:
+        status = 404 if "does not exist" in str(exc) else 422
+        raise HTTPException(status, str(exc)) from exc
+
+
+@app.get("/api/cameras/{camera_id}/frame.jpg")
+def latest_camera_frame(camera_id: str):
+    try:
+        frame = service.camera_frame(camera_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if frame is None:
+        raise HTTPException(404, "No current camera frame")
+    return Response(frame["data"], media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0", "X-Frame-Sequence": str(frame["sequence"])})
+
+
+@app.get("/api/cameras/{camera_id}/stream")
+async def camera_stream(camera_id: str):
+    try:
+        service._camera(camera_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    async def frames():
+        last_sequence = -1
+        while True:
+            frame = service.current_camera_frame(camera_id)
+            if frame is not None and frame["sequence"] != last_sequence:
+                last_sequence = frame["sequence"]
+                yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame["data"])).encode() + b"\r\n\r\n" + frame["data"] + b"\r\n"
+            await asyncio.sleep(.05)
+
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Accel-Buffering": "no"})
+
+
 @app.post("/api/cameras", status_code=201)
 def add_camera(camera: Camera):
     facility = active()
@@ -150,7 +203,7 @@ def delete_camera(camera_id: str):
     facility.cameras=[x for x in facility.cameras if x.id!=camera_id]
     for zone in facility.zones: zone.camera_ids=[x for x in zone.camera_ids if x!=camera_id]
     for exit_ in facility.exits: exit_.camera_ids=[x for x in exit_.camera_ids if x!=camera_id]
-    store.save_facility(facility)
+    service.remove_camera_state(camera_id); store.save_facility(facility)
 
 
 @app.get("/api/zones")

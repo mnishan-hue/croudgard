@@ -2,7 +2,7 @@
 
 CrowdGuard runs computer vision in a local edge worker, not in the hosted backend:
 
-`camera → YOLO person detection → ByteTrack IDs → motion metrics → temporal smoothing → FastAPI → exit ranking → ESP32`
+`3 cameras → independent YOLO + ByteTrack workers → annotated memory-only streams + motion metrics → FastAPI fusion → exit ranking → ESP32`
 
 The worker uses the YOLO nano model by default and requests only class `0` (person). ByteTrack identifiers are temporary anonymous track IDs. No facial recognition, identity matching, or face storage exists.
 
@@ -20,15 +20,15 @@ The first YOLO run downloads `yolo11n.pt`. Later runs work offline while that mo
 Run one independent worker per camera. Each process has independent ByteTrack state:
 
 ```powershell
-python -m backend.cv.worker --camera-id cam_main --source 0 --preview
-python -m backend.cv.worker --camera-id cam_exit_a --source 1 --counting-line-y 0.55 --preview
-python -m backend.cv.worker --camera-id cam_exit_b --source 2 --counting-line-y 0.55 --preview
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_main --source 0 --preview
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_a --source 1 --counting-line-y 0.55 --preview
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_b --source 2 --counting-line-y 0.55 --preview
 ```
 
-Important performance controls are `--model`, `--image-size`, `--frame-skip`, `--confidence`, `--width`, and `--height`. Start with `yolo11n.pt`, 640 pixels, and frame skip 2.
+Important performance controls are `--model`, `--image-size`, `--frame-skip`, `--confidence`, `--width`, `--height`, `--stream-fps`, `--stream-width`, and `--jpeg-quality`. Start with `yolo11n.pt`, 640-pixel inference, frame skip 2, and 4 FPS video publishing.
 
 The worker reconnects after interrupted camera reads and continues running when the API is temporarily unreachable. Use `--density-count-capacity` to calibrate count pressure for each view. Counting-line crossings have a per-track cooldown to reduce repeated counts near the line.
 
 The backend smooths the last 20 observations. A high-risk state needs at least three consecutive observations before it may cross the intervention threshold, and hysteresis prevents rapid toggling near the threshold.
 
-The browser Teachable Machine classifier remains an optional secondary input. The local YOLO/tracking worker is the primary path and works without it.
+Live Control opens the three backend MJPEG streams together. Stream freshness is tracked separately from metric freshness: missing video is labelled immediately, while decisions still depend only on current validated AI observations. If either enabled exit lacks a current observation, route guidance is withheld.

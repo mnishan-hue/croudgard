@@ -1,0 +1,22 @@
+[
+  {
+    "camera_id": "cam_main",
+    "source": "0",
+    "density_count_capacity": 30,
+    "stream_fps": 4
+  },
+  {
+    "camera_id": "cam_exit_a",
+    "source": "1",
+    "counting_line_y": 0.55,
+    "density_count_capacity": 18,
+    "stream_fps": 4
+  },
+  {
+    "camera_id": "cam_exit_b",
+    "source": "2",
+    "counting_line_y": 0.55,
+    "density_count_capacity": 18,
+    "stream_fps": 4
+  }
+]

@@ -201,6 +201,7 @@ class LiveSnapshot(BaseModel):
     events_acknowledged_at: str | None = None
     camera_ai_active: bool = False
     reporting_camera_ids: list[str] = Field(default_factory=list)
+    streaming_camera_ids: list[str] = Field(default_factory=list)
     exit_coverage_complete: bool = False
 
 
