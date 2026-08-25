@@ -63,7 +63,7 @@ export default function CameraDetail() {
   const reporting = snapshot.reporting_camera_ids.includes(camera.id);
   const streaming = snapshot.streaming_camera_ids?.includes(camera.id) ?? false;
   const browserConnected =
-    browserStation.status === "RUNNING" && Boolean(browserStation.streams[camera.id]);
+    browserStation.status === "RUNNING" && Boolean(browserStation.videos[camera.id]);
   const values: [string, string, string?][] = [
     ["Crowd condition", reporting?humanize(primary?.crowd_state ?? "NO DATA"):"—"],
     ["People detected", reporting?formatNumber(metrics?.people_count):"—"],
@@ -131,12 +131,12 @@ export default function CameraDetail() {
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
         <Panel
           title="Live annotated footage"
-          eyebrow={streaming ? browserConnected ? "STREAMING FROM THIS BROWSER" : "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR CAMERA" : "CAMERA UNAVAILABLE"}
+          eyebrow={streaming ? browserConnected ? browserStation.sourceMode === "DEMO_VIDEOS" ? "RECORDED VIDEO · ANALYSIS LIVE" : "LIVE CAMERA · ANALYSIS LIVE" : "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR CAMERA" : "CAMERA UNAVAILABLE"}
         >
           <CameraStream cameraId={camera.id} cameraName={camera.name} streaming={streaming} />
           <p className="border-t border-border p-3 text-[9px] leading-relaxed text-muted-foreground">
             {browserConnected
-              ? "Detection overlays are produced by COCO-SSD in this browser. "
+              ? browserStation.sourceMode === "DEMO_VIDEOS" ? "This recorded source is analyzed by the shared offline COCO-SSD model. " : "Detection overlays are produced by COCO-SSD from the live camera in this browser. "
               : "Edge-worker overlays are produced by YOLO and ByteTrack. "}
             The backend keeps only the newest frame in memory and does not write
             footage to disk.

@@ -290,6 +290,61 @@ def test_create_and_control_reject_invalid_references(tmp_path):
     assert api.post("/api/control/manual",json=command).status_code==404
 
 
+def test_demo_video_lifecycle_uses_real_state_and_restart_clears_only_analysis(tmp_path):
+    api = client(tmp_path)
+    camera_ids = ["cam_main", "cam_exit_a", "cam_exit_b"]
+    started = api.post(
+        "/api/demo/video-control",
+        json={"action": "START", "camera_ids": camera_ids},
+    )
+    assert started.status_code == 200
+    assert started.json()["camera_ids"] == camera_ids
+
+    observation = {
+        "camera_id": "cam_main",
+        "people_count": 8,
+        "tracked_people": 8,
+        "detection_confidence": .9,
+        "fps": 3,
+        "density_score": 40,
+        "occupied_area_ratio": .2,
+        "congestion_score": 45,
+        "risk_score": 50,
+        "trend": "RISING",
+    }
+    assert api.post("/api/ai/cv-observation", json=observation).status_code == 200
+    assert api.get("/api/system").json()["camera_ai_active"] is True
+
+    restarted = api.post(
+        "/api/demo/video-control",
+        json={"action": "RESTART", "camera_ids": camera_ids},
+    )
+    assert restarted.status_code == 200
+    snapshot = restarted.json()["snapshot"]
+    assert snapshot["camera_ai_active"] is False
+    assert snapshot["risk_history"] == []
+    assert snapshot["risk_timeline"] == []
+    assert len(snapshot["facility"]["cameras"]) == 3
+    assert any(
+        event["category"] == "DEMO_VIDEO" and "restart" in event["message"]
+        for event in snapshot["events"]
+    )
+
+
+def test_demo_video_control_validates_camera_scope(tmp_path):
+    api = client(tmp_path)
+    assert api.post(
+        "/api/demo/video-control",
+        json={"action": "PAUSE", "camera_ids": ["missing"]},
+    ).status_code == 422
+    assert api.post(
+        "/api/demo/video-control",
+        json={
+            "action": "START",
+            "camera_ids": ["cam_main", "cam_exit_a", "cam_exit_b", "extra"],
+        },
+    ).status_code == 422
+
 def test_removed_scenario_endpoint_is_unavailable(tmp_path):
     api=client(tmp_path)
     assert api.post("/api/demo/scenario",json={"scenario":"ZONE_CONGESTION"}).status_code in {404,405}

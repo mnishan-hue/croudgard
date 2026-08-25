@@ -250,5 +250,10 @@ class ManualControlRequest(BaseModel):
     sentinel_id: str | None = None
 
 
+class DemoVideoControlRequest(BaseModel):
+    action: Literal["START", "PAUSE", "RESTART", "STOP"]
+    camera_ids: list[str] = Field(min_length=1, max_length=3)
+
+
 class AutoControlRequest(BaseModel):
     enabled: bool

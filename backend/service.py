@@ -103,6 +103,23 @@ class CrowdGuardService:
         self.camera_cv_observations.pop(camera_id, None)
         self.camera_frames.pop(camera_id, None)
 
+    @synchronized
+    def control_demo_videos(self, request):
+        camera_ids = list(dict.fromkeys(request.camera_ids))
+        cameras = [self._camera(camera_id) for camera_id in camera_ids]
+        if request.action == "RESTART":
+            for camera in cameras:
+                self.camera_people_counts.pop(camera.id, None)
+                self.camera_crowd_observations.pop(camera.id, None)
+                self.camera_cv_observations.pop(camera.id, None)
+                self.camera_frames.pop(camera.id, None)
+            self.risk_history.clear()
+            self.risk_timeline.clear()
+            self.last_dispatched_command.clear()
+        names = ", ".join(camera.name for camera in cameras)
+        self.store.add_event(EventLog(category="DEMO_VIDEO", message=f"Recorded video sources {request.action.lower()}: {names}"))
+        return {"action": request.action, "camera_ids": camera_ids, "snapshot": self.snapshot()}
+
     def _fresh_cv(self) -> dict[str, dict]:
         latest = {camera_id: history[-1] for camera_id, history in self.camera_cv_observations.items() if history}
         return self._fresh(latest)

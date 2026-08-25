@@ -34,10 +34,14 @@ type PersonModel = {
   ): Promise<Detection[]>;
 };
 
+export type CameraSourceMode = "LIVE_CAMERAS" | "DEMO_VIDEOS";
+
 type RuntimeCamera = {
   camera: Camera;
-  deviceId: string;
-  stream: MediaStream;
+  sourceMode: CameraSourceMode;
+  deviceId?: string;
+  stream?: MediaStream;
+  objectUrl?: string;
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   lastAnalyzedAt: number;
@@ -52,14 +56,26 @@ export type BrowserCameraMetric = {
 
 type BrowserCameraContextValue = {
   status: StationStatus;
+  sourceMode: CameraSourceMode;
   devices: MediaDeviceInfo[];
   assignments: Record<string, string>;
+  videoFiles: Record<string, File>;
   streams: Record<string, MediaStream>;
+  videos: Record<string, HTMLVideoElement>;
+  playing: Record<string, boolean>;
   metrics: Record<string, BrowserCameraMetric>;
   error: string;
   prepare(cameras: Camera[]): Promise<void>;
+  setSourceMode(mode: CameraSourceMode): void;
   setAssignment(cameraId: string, deviceId: string): void;
+  setVideoFile(cameraId: string, file?: File): void;
   start(cameras: Camera[]): Promise<void>;
+  playAll(): Promise<void>;
+  pauseAll(): Promise<void>;
+  restartAll(): Promise<void>;
+  playOne(cameraId: string): Promise<void>;
+  pauseOne(cameraId: string): Promise<void>;
+  restartOne(cameraId: string): Promise<void>;
   stop(): void;
 };
 
@@ -67,6 +83,7 @@ const BrowserCameraContext = createContext<BrowserCameraContextValue | null>(
   null,
 );
 const STORAGE_KEY = "crowdguard.browser-camera-assignments.v1";
+const AI_TARGET_FPS = 3;
 const MODEL_PATH = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/person_model/model.json`;
 
 let modelPromise: Promise<PersonModel> | null = null;
@@ -93,7 +110,9 @@ function canvasBlob(canvas: HTMLCanvasElement) {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (blob) =>
-        blob ? resolve(blob) : reject(new Error("Camera frame could not be encoded")),
+        blob
+          ? resolve(blob)
+          : reject(new Error("Camera frame could not be encoded")),
       "image/jpeg",
       0.72,
     );
@@ -109,15 +128,40 @@ function readableCameraError(reason: unknown) {
     if (reason.name === "NotReadableError")
       return "A selected camera is already being used by another application.";
   }
-  return reason instanceof Error ? reason.message : "The browser camera station stopped unexpectedly.";
+  return reason instanceof Error
+    ? reason.message
+    : "The browser camera station stopped unexpectedly.";
 }
 
+async function sendDemoControl(
+  action: "START" | "PAUSE" | "RESTART" | "STOP",
+  cameraIds: string[],
+) {
+  const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(apiBase + "/demo/video-control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, camera_ids: cameraIds }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      "Backend rejected recorded-video control (" + response.status + ")",
+    );
+  }
+}
 export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StationStatus>("IDLE");
+  const [sourceMode, setSourceModeState] =
+    useState<CameraSourceMode>("LIVE_CAMERAS");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [videoFiles, setVideoFiles] = useState<Record<string, File>>({});
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
-  const [metrics, setMetrics] = useState<Record<string, BrowserCameraMetric>>({});
+  const [videos, setVideos] = useState<Record<string, HTMLVideoElement>>({});
+  const [playing, setPlaying] = useState<Record<string, boolean>>({});
+  const [metrics, setMetrics] = useState<Record<string, BrowserCameraMetric>>(
+    {},
+  );
   const [error, setError] = useState("");
   const runningRef = useRef(false);
   const runtimesRef = useRef<RuntimeCamera[]>([]);
@@ -127,16 +171,25 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     runningRef.current = false;
     generationRef.current += 1;
     for (const runtime of runtimesRef.current) {
-      runtime.stream.getTracks().forEach((track) => track.stop());
+      runtime.stream?.getTracks().forEach((track) => track.stop());
       runtime.video.pause();
       runtime.video.srcObject = null;
+      runtime.video.removeAttribute("src");
+      runtime.video.load();
+      if (runtime.objectUrl) URL.revokeObjectURL(runtime.objectUrl);
     }
     runtimesRef.current = [];
     setStreams({});
+    setVideos({});
+    setPlaying({});
     setMetrics({});
   }, []);
 
   const stop = useCallback(() => {
+    const demoIds = runtimesRef.current
+      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+      .map((runtime) => runtime.camera.id);
+    if (demoIds.length) void sendDemoControl("STOP", demoIds);
     cleanup();
     setError("");
     setStatus("IDLE");
@@ -151,7 +204,9 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       !["localhost", "127.0.0.1"].includes(window.location.hostname)
     ) {
       setStatus("ERROR");
-      setError("Direct cameras require HTTPS. Open the secure deployed website.");
+      setError(
+        "Direct cameras require HTTPS. Open the secure deployed website.",
+      );
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -166,10 +221,11 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         audio: false,
       });
       permissionStream.getTracks().forEach((track) => track.stop());
-      const available = (await navigator.mediaDevices.enumerateDevices()).filter(
-        (device) => device.kind === "videoinput",
-      );
-      if (!available.length) throw new Error("No cameras were found on this computer.");
+      const available = (
+        await navigator.mediaDevices.enumerateDevices()
+      ).filter((device) => device.kind === "videoinput");
+      if (!available.length)
+        throw new Error("No cameras were found on this computer.");
       const validIds = new Set(available.map((device) => device.deviceId));
       let saved: Record<string, string> = {};
       try {
@@ -202,136 +258,181 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setSourceMode = useCallback(
+    (mode: CameraSourceMode) => {
+      if (mode === sourceMode) return;
+      stop();
+      setSourceModeState(mode);
+      setError("");
+    },
+    [sourceMode, stop],
+  );
+
   const setAssignment = useCallback((cameraId: string, deviceId: string) => {
     setAssignments((current) => ({ ...current, [cameraId]: deviceId }));
   }, []);
 
-  const publish = useCallback(async (runtime: RuntimeCamera, model: PersonModel) => {
-    const startedAt = performance.now();
-    const detections = await model.detect(runtime.video, 50, 0.5);
-    const people = detections.filter(
-      (detection) => detection.class === "person" && detection.score >= 0.55,
-    );
-    const sourceWidth = runtime.video.videoWidth || 640;
-    const sourceHeight = runtime.video.videoHeight || 360;
-    const width = Math.min(720, sourceWidth);
-    const height = Math.max(1, Math.round((sourceHeight / sourceWidth) * width));
-    runtime.canvas.width = width;
-    runtime.canvas.height = height;
-    const context = runtime.canvas.getContext("2d");
-    if (!context) throw new Error("Camera drawing surface is unavailable");
-    context.drawImage(runtime.video, 0, 0, width, height);
-    const scaleX = width / sourceWidth;
-    const scaleY = height / sourceHeight;
-    context.lineWidth = 2;
-    context.font = "12px monospace";
-    context.strokeStyle = "#2dd4bf";
-    context.fillStyle = "#071019cc";
-    for (const person of people) {
-      const [x, y, boxWidth, boxHeight] = person.bbox;
-      const left = x * scaleX;
-      const top = y * scaleY;
-      const scaledWidth = boxWidth * scaleX;
-      const scaledHeight = boxHeight * scaleY;
-      context.strokeRect(left, top, scaledWidth, scaledHeight);
-      const label = `PERSON ${Math.round(person.score * 100)}%`;
-      const labelWidth = context.measureText(label).width + 8;
-      context.fillRect(left, Math.max(0, top - 18), labelWidth, 18);
-      context.fillStyle = "#2dd4bf";
-      context.fillText(label, left + 4, Math.max(12, top - 5));
-      context.fillStyle = "#071019cc";
-    }
-    context.fillStyle = "#071019cc";
-    context.fillRect(8, 8, 154, 25);
-    context.fillStyle = "#2dd4bf";
-    context.fillText(`BROWSER AI · ${people.length} PEOPLE`, 15, 25);
-
-    const occupiedArea = people.reduce((sum, person) => {
-      const [, , boxWidth, boxHeight] = person.bbox;
-      return sum + boxWidth * boxHeight;
-    }, 0);
-    const occupiedAreaRatio = clamp(occupiedArea / (sourceWidth * sourceHeight), 0, 1);
-    const capacity = runtime.camera.id.includes("exit") ? 18 : 30;
-    const densityScore = clamp(
-      Math.max((people.length / capacity) * 100, occupiedAreaRatio * 100),
-    );
-    const congestionScore = clamp(densityScore * 0.85 + people.length * 1.5);
-    const riskScore = clamp(densityScore * 0.7 + congestionScore * 0.3);
-    const now = performance.now();
-    const fps = clamp(
-      runtime.lastAnalyzedAt ? 1000 / (now - runtime.lastAnalyzedAt) : 0,
-      0,
-      240,
-    );
-    const trend =
-      Math.abs(riskScore - runtime.lastRisk) < 3
-        ? "STABLE"
-        : riskScore > runtime.lastRisk
-          ? "RISING"
-          : "FALLING";
-    runtime.lastAnalyzedAt = now;
-    runtime.lastRisk = riskScore;
-    const confidence = people.length
-      ? people.reduce((sum, person) => sum + person.score, 0) / people.length
-      : 0.75;
-    const frame = await canvasBlob(runtime.canvas);
-    const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
-    const [frameResponse, observationResponse] = await Promise.all([
-      fetch(`${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`, {
-        method: "POST",
-        headers: { "Content-Type": "image/jpeg" },
-        body: frame,
-      }),
-      fetch(`${apiBase}/ai/cv-observation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          camera_id: runtime.camera.id,
-          people_count: people.length,
-          tracked_people: people.length,
-          detection_confidence: confidence,
-          fps,
-          density_score: densityScore,
-          occupied_area_ratio: occupiedAreaRatio,
-          congestion_score: congestionScore,
-          risk_score: riskScore,
-          trend,
-          disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
-        }),
-      }),
-    ]);
-    if (!frameResponse.ok || !observationResponse.ok) {
-      throw new Error(
-        `Backend rejected camera data (${frameResponse.status}/${observationResponse.status})`,
-      );
-    }
-    setMetrics((current) => ({
-      ...current,
-      [runtime.camera.id]: {
-        peopleCount: people.length,
-        confidence,
-        fps,
-      },
-    }));
-    const elapsed = performance.now() - startedAt;
-    if (elapsed < 180) await wait(180 - elapsed);
+  const setVideoFile = useCallback((cameraId: string, file?: File) => {
+    setVideoFiles((current) => {
+      const next = { ...current };
+      if (file) next[cameraId] = file;
+      else delete next[cameraId];
+      return next;
+    });
   }, []);
+
+  const publish = useCallback(
+    async (runtime: RuntimeCamera, model: PersonModel) => {
+      const detections = await model.detect(runtime.video, 50, 0.5);
+      const people = detections.filter(
+        (detection) => detection.class === "person" && detection.score >= 0.55,
+      );
+      const sourceWidth = runtime.video.videoWidth || 640;
+      const sourceHeight = runtime.video.videoHeight || 360;
+      const width = Math.min(720, sourceWidth);
+      const height = Math.max(
+        1,
+        Math.round((sourceHeight / sourceWidth) * width),
+      );
+      runtime.canvas.width = width;
+      runtime.canvas.height = height;
+      const context = runtime.canvas.getContext("2d");
+      if (!context) throw new Error("Camera drawing surface is unavailable");
+      context.drawImage(runtime.video, 0, 0, width, height);
+      const scaleX = width / sourceWidth;
+      const scaleY = height / sourceHeight;
+      context.lineWidth = 2;
+      context.font = "12px monospace";
+      context.strokeStyle = "#2dd4bf";
+      context.fillStyle = "#071019cc";
+      for (const person of people) {
+        const [x, y, boxWidth, boxHeight] = person.bbox;
+        const left = x * scaleX;
+        const top = y * scaleY;
+        const scaledWidth = boxWidth * scaleX;
+        const scaledHeight = boxHeight * scaleY;
+        context.strokeRect(left, top, scaledWidth, scaledHeight);
+        const label = `PERSON ${Math.round(person.score * 100)}%`;
+        const labelWidth = context.measureText(label).width + 8;
+        context.fillRect(left, Math.max(0, top - 18), labelWidth, 18);
+        context.fillStyle = "#2dd4bf";
+        context.fillText(label, left + 4, Math.max(12, top - 5));
+        context.fillStyle = "#071019cc";
+      }
+      context.fillStyle = "#071019cc";
+      context.fillRect(8, 8, 154, 25);
+      context.fillStyle = "#2dd4bf";
+      context.fillText(`LIVE AI · ${people.length} PEOPLE`, 15, 25);
+
+      const occupiedArea = people.reduce((sum, person) => {
+        const [, , boxWidth, boxHeight] = person.bbox;
+        return sum + boxWidth * boxHeight;
+      }, 0);
+      const occupiedAreaRatio = clamp(
+        occupiedArea / (sourceWidth * sourceHeight),
+        0,
+        1,
+      );
+      const capacity = runtime.camera.id.includes("exit") ? 18 : 30;
+      const densityScore = clamp(
+        Math.max((people.length / capacity) * 100, occupiedAreaRatio * 100),
+      );
+      const congestionScore = clamp(densityScore * 0.85 + people.length * 1.5);
+      const riskScore = clamp(densityScore * 0.7 + congestionScore * 0.3);
+      const now = performance.now();
+      const fps = clamp(
+        runtime.lastAnalyzedAt ? 1000 / (now - runtime.lastAnalyzedAt) : 0,
+        0,
+        240,
+      );
+      const trend =
+        Math.abs(riskScore - runtime.lastRisk) < 3
+          ? "STABLE"
+          : riskScore > runtime.lastRisk
+            ? "RISING"
+            : "FALLING";
+      runtime.lastAnalyzedAt = now;
+      runtime.lastRisk = riskScore;
+      const confidence = people.length
+        ? people.reduce((sum, person) => sum + person.score, 0) / people.length
+        : 0.75;
+      const frame = await canvasBlob(runtime.canvas);
+      const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
+      const [frameResponse, observationResponse] = await Promise.all([
+        fetch(
+          `${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "image/jpeg" },
+            body: frame,
+          },
+        ),
+        fetch(`${apiBase}/ai/cv-observation`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            camera_id: runtime.camera.id,
+            people_count: people.length,
+            tracked_people: people.length,
+            detection_confidence: confidence,
+            fps,
+            density_score: densityScore,
+            occupied_area_ratio: occupiedAreaRatio,
+            congestion_score: congestionScore,
+            risk_score: riskScore,
+            trend,
+            disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
+          }),
+        }),
+      ]);
+      if (!frameResponse.ok || !observationResponse.ok) {
+        throw new Error(
+          `Backend rejected camera data (${frameResponse.status}/${observationResponse.status})`,
+        );
+      }
+      setMetrics((current) => ({
+        ...current,
+        [runtime.camera.id]: {
+          peopleCount: people.length,
+          confidence,
+          fps,
+        },
+      }));
+    },
+    [],
+  );
 
   const start = useCallback(
     async (cameras: Camera[]) => {
       const enabled = cameras.filter((camera) => camera.enabled).slice(0, 3);
-      const selectedCameras = enabled.filter((camera) => assignments[camera.id]);
-      const selected = selectedCameras.map((camera) => assignments[camera.id]);
+      const selectedCameras = enabled.filter((camera) =>
+        sourceMode === "DEMO_VIDEOS"
+          ? Boolean(videoFiles[camera.id])
+          : Boolean(assignments[camera.id]),
+      );
+      const selectedDevices = selectedCameras.map(
+        (camera) => assignments[camera.id],
+      );
       if (!selectedCameras.length) {
         setStatus("ERROR");
-        setError("Select at least one physical camera to start monitoring.");
+        setError(
+          sourceMode === "DEMO_VIDEOS"
+            ? "Select at least one recorded video to start the demonstration."
+            : "Select at least one physical camera to start monitoring.",
+        );
         return;
       }
-      if (new Set(selected).size !== selected.length) {
+      if (
+        sourceMode === "LIVE_CAMERAS" &&
+        new Set(selectedDevices).size !== selectedDevices.length
+      ) {
         setStatus("ERROR");
-        setError("Each CrowdGuard camera must use a different physical camera.");
+        setError(
+          "Each CrowdGuard camera must use a different physical camera.",
+        );
         return;
       }
+
       cleanup();
       setError("");
       setStatus("LOADING_AI");
@@ -340,23 +441,16 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         setStatus("CONNECTING");
         const runtimes: RuntimeCamera[] = [];
         for (const camera of selectedCameras) {
-          const deviceId = assignments[camera.id];
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              deviceId: { exact: deviceId },
-              width: { ideal: 640 },
-              height: { ideal: 360 },
-              frameRate: { ideal: 15, max: 24 },
-            },
-            audio: false,
-          });
           const video = document.createElement("video");
           video.muted = true;
           video.playsInline = true;
-          video.srcObject = stream;
-          await new Promise<void>((resolve, reject) => {
+          video.preload = "auto";
+          let deviceId: string | undefined;
+          let stream: MediaStream | undefined;
+          let objectUrl: string | undefined;
+          const loaded = new Promise<void>((resolve, reject) => {
             const timeout = window.setTimeout(
-              () => reject(new Error(`${camera.name} did not start in time.`)),
+              () => reject(new Error(camera.name + " did not start in time.")),
               10_000,
             );
             video.onloadedmetadata = () => {
@@ -365,48 +459,108 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             };
             video.onerror = () => {
               window.clearTimeout(timeout);
-              reject(new Error(`${camera.name} could not produce video.`));
+              reject(new Error(camera.name + " could not produce video."));
             };
           });
-          await video.play();
+          if (sourceMode === "DEMO_VIDEOS") {
+            objectUrl = URL.createObjectURL(videoFiles[camera.id]);
+            video.src = objectUrl;
+          } else {
+            deviceId = assignments[camera.id];
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                deviceId: { exact: deviceId },
+                width: { ideal: 640 },
+                height: { ideal: 360 },
+                frameRate: { ideal: 15, max: 24 },
+              },
+              audio: false,
+            });
+            video.srcObject = stream;
+          }
+          await loaded;
           runtimes.push({
             camera,
+            sourceMode,
             deviceId,
             stream,
+            objectUrl,
             video,
             canvas: document.createElement("canvas"),
             lastAnalyzedAt: 0,
             lastRisk: 0,
           });
-          // Keep partially opened devices reachable so a later camera failure
-          // still closes every stream acquired during this start attempt.
           runtimesRef.current = runtimes;
         }
-        runtimesRef.current = runtimes;
+
+        await Promise.all(runtimes.map((runtime) => runtime.video.play()));
         setStreams(
           Object.fromEntries(
-            runtimes.map((runtime) => [runtime.camera.id, runtime.stream]),
+            runtimes
+              .filter((runtime) => runtime.stream)
+              .map((runtime) => [
+                runtime.camera.id,
+                runtime.stream as MediaStream,
+              ]),
           ),
         );
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(assignments));
+        setVideos(
+          Object.fromEntries(
+            runtimes.map((runtime) => [runtime.camera.id, runtime.video]),
+          ),
+        );
+        setPlaying(
+          Object.fromEntries(
+            runtimes.map((runtime) => [runtime.camera.id, true]),
+          ),
+        );
+        if (sourceMode === "LIVE_CAMERAS") {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(assignments));
+        } else {
+          await sendDemoControl(
+            "START",
+            runtimes.map((runtime) => runtime.camera.id),
+          );
+        }
+
         runningRef.current = true;
         const generation = ++generationRef.current;
         setStatus("RUNNING");
         for (const runtime of runtimes) {
-          for (const track of runtime.stream.getVideoTracks()) {
+          runtime.video.onended = () =>
+            setPlaying((current) => ({
+              ...current,
+              [runtime.camera.id]: false,
+            }));
+          for (const track of runtime.stream?.getVideoTracks() ?? []) {
             track.onended = () => {
-              if (!runningRef.current || generation !== generationRef.current) return;
+              if (!runningRef.current || generation !== generationRef.current)
+                return;
               cleanup();
               setStatus("ERROR");
-              setError(`${runtime.camera.name} was disconnected. Reconnect it and start again.`);
+              setError(
+                runtime.camera.name +
+                  " was disconnected. Reconnect it and start again.",
+              );
             };
           }
         }
+
         void (async () => {
           let consecutiveFailures = 0;
+          const cycleMilliseconds = 1000 / AI_TARGET_FPS;
           while (runningRef.current && generation === generationRef.current) {
+            const cycleStartedAt = performance.now();
             for (const runtime of runtimes) {
-              if (!runningRef.current || generation !== generationRef.current) return;
+              if (!runningRef.current || generation !== generationRef.current)
+                return;
+              if (
+                runtime.video.paused ||
+                runtime.video.ended ||
+                runtime.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+              ) {
+                continue;
+              }
               try {
                 await publish(runtime, model);
                 consecutiveFailures = 0;
@@ -418,9 +572,11 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
                   setError(readableCameraError(reason));
                   return;
                 }
-                await wait(700);
               }
             }
+            const remaining =
+              cycleMilliseconds - (performance.now() - cycleStartedAt);
+            await wait(Math.max(0, remaining));
           }
         })();
       } catch (reason) {
@@ -429,36 +585,138 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         setError(readableCameraError(reason));
       }
     },
-    [assignments, cleanup, publish],
+    [assignments, cleanup, publish, sourceMode, videoFiles],
   );
 
+  const playOne = useCallback(async (cameraId: string) => {
+    const runtime = runtimesRef.current.find(
+      (candidate) => candidate.camera.id === cameraId,
+    );
+    if (!runtime) return;
+    await runtime.video.play();
+    if (runtime.sourceMode === "DEMO_VIDEOS") {
+      await sendDemoControl("START", [cameraId]);
+    }
+    setPlaying((current) => ({ ...current, [cameraId]: true }));
+  }, []);
+
+  const pauseOne = useCallback(async (cameraId: string) => {
+    const runtime = runtimesRef.current.find(
+      (candidate) => candidate.camera.id === cameraId,
+    );
+    if (!runtime) return;
+    runtime.video.pause();
+    if (runtime.sourceMode === "DEMO_VIDEOS") {
+      await sendDemoControl("PAUSE", [cameraId]);
+    }
+    setPlaying((current) => ({ ...current, [cameraId]: false }));
+  }, []);
+
+  const restartOne = useCallback(async (cameraId: string) => {
+    const runtime = runtimesRef.current.find(
+      (candidate) => candidate.camera.id === cameraId,
+    );
+    if (!runtime) return;
+    if (runtime.sourceMode === "DEMO_VIDEOS") {
+      await sendDemoControl("RESTART", [cameraId]);
+    }
+    runtime.lastAnalyzedAt = 0;
+    runtime.lastRisk = 0;
+    runtime.video.currentTime = 0;
+    await runtime.video.play();
+    setPlaying((current) => ({ ...current, [cameraId]: true }));
+  }, []);
+
+  const playAll = useCallback(async () => {
+    const runtimes = runtimesRef.current;
+    await Promise.all(runtimes.map((runtime) => runtime.video.play()));
+    const demoIds = runtimes
+      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+      .map((runtime) => runtime.camera.id);
+    if (demoIds.length) await sendDemoControl("START", demoIds);
+    setPlaying(
+      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, true])),
+    );
+  }, []);
+
+  const pauseAll = useCallback(async () => {
+    const runtimes = runtimesRef.current;
+    for (const runtime of runtimes) runtime.video.pause();
+    setPlaying(
+      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, false])),
+    );
+    const demoIds = runtimes
+      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+      .map((runtime) => runtime.camera.id);
+    if (demoIds.length) await sendDemoControl("PAUSE", demoIds);
+  }, []);
+
+  const restartAll = useCallback(async () => {
+    const runtimes = runtimesRef.current;
+    const demoIds = runtimes
+      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+      .map((runtime) => runtime.camera.id);
+    if (demoIds.length) await sendDemoControl("RESTART", demoIds);
+    for (const runtime of runtimes) {
+      runtime.lastAnalyzedAt = 0;
+      runtime.lastRisk = 0;
+      runtime.video.currentTime = 0;
+    }
+    await Promise.all(runtimes.map((runtime) => runtime.video.play()));
+    setPlaying(
+      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, true])),
+    );
+  }, []);
   const value = useMemo(
     () => ({
       status,
+      sourceMode,
       devices,
       assignments,
+      videoFiles,
       streams,
+      videos,
+      playing,
       metrics,
       error,
       prepare,
+      setSourceMode,
       setAssignment,
+      setVideoFile,
       start,
+      playAll,
+      pauseAll,
+      restartAll,
+      playOne,
+      pauseOne,
+      restartOne,
       stop,
     }),
     [
       status,
+      sourceMode,
       devices,
       assignments,
+      videoFiles,
       streams,
+      videos,
+      playing,
       metrics,
       error,
       prepare,
+      setSourceMode,
       setAssignment,
+      setVideoFile,
       start,
+      playAll,
+      pauseAll,
+      restartAll,
+      playOne,
+      pauseOne,
+      restartOne,
       stop,
     ],
   );
-
   return (
     <BrowserCameraContext.Provider value={value}>
       {children}
@@ -469,6 +727,8 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
 export function useBrowserCameras() {
   const value = useContext(BrowserCameraContext);
   if (!value)
-    throw new Error("useBrowserCameras must be used inside BrowserCameraProvider");
+    throw new Error(
+      "useBrowserCameras must be used inside BrowserCameraProvider",
+    );
   return value;
 }

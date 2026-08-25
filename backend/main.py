@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
+from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, DemoVideoControlRequest, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
 from backend.service import CrowdGuardService
 from backend.store import SQLiteStore
 
@@ -102,6 +102,14 @@ def crowd_observation(observation: CrowdClassificationObservation):
 def cv_observation(observation: ComputerVisionObservation):
     try:
         return service.record_cv_observation(observation)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/demo/video-control")
+def demo_video_control(request: DemoVideoControlRequest):
+    try:
+        return service.control_demo_videos(request)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
