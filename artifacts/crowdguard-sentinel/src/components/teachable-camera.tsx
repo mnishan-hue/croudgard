@@ -43,7 +43,16 @@ export function TeachableCamera({ cameraId }: { cameraId: string }) {
     if(mountedRef.current)setStatus('IDLE');
   }
 
-  useEffect(() => () => {mountedRef.current=false;runningRef.current=false;if(frameRef.current!==null)cancelAnimationFrame(frameRef.current);webcamRef.current?.stop();containerRef.current?.replaceChildren()}, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      runningRef.current = false;
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      webcamRef.current?.stop();
+      webcamRef.current = null;
+    };
+  }, []);
 
   async function start() {
     if (status === 'LOADING' || status === 'RUNNING') return;
@@ -142,10 +151,13 @@ export function TeachableCamera({ cameraId }: { cameraId: string }) {
         : <button type="button" onClick={() => void start()} disabled={status === 'LOADING'} className="button-primary disabled:opacity-50">{status === 'LOADING' ? 'Loading AI…' : 'Start live analysis'}</button>}
     </div>
     <div className="grid md:grid-cols-[1.25fr_1fr]">
-      <div ref={containerRef} className="relative grid aspect-[4/3] min-h-56 place-items-center overflow-hidden bg-[#071019] text-center data-mono text-[9px] text-muted-foreground">
-        {status === 'IDLE' && 'Camera preview will appear here'}
-        {status === 'LOADING' && 'Loading private on-device models…'}
-        {status === 'ERROR' && 'Camera could not be started'}
+      <div className="relative grid aspect-[4/3] min-h-56 place-items-center overflow-hidden bg-[#071019] text-center data-mono text-[9px] text-muted-foreground">
+        <div ref={containerRef} className="absolute inset-0" />
+        {status !== 'RUNNING' && <div className="relative z-10 px-4">
+          {status === 'IDLE' && 'Camera preview will appear here'}
+          {status === 'LOADING' && 'Loading private on-device models…'}
+          {status === 'ERROR' && 'Camera could not be started'}
+        </div>}
       </div>
       <div className="border-t border-border p-4 md:border-l md:border-t-0">
         <div className="mb-4 border border-secondary/40 bg-secondary/5 p-3">
