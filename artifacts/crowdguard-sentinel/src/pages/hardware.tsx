@@ -37,6 +37,7 @@ export default function Hardware() {
       setFeedback(reason instanceof Error ? reason.message : "Command failed");
     }
   }
+  async function heartbeat(sentinelId:string){try{await apiFetch(`/hardware/${sentinelId}/heartbeat`,{method:"POST"});setFeedback("Sentinel heartbeat acknowledged");await refresh()}catch(reason){setFeedback(reason instanceof Error?reason.message:"Heartbeat failed")}}
   return (
     <div className="enter-rise">
       <PageIntro
@@ -80,8 +81,14 @@ export default function Hardware() {
                           {s.connected ? "CONNECTED" : "NOT CONFIGURED"}
                         </div>
                       </div>
+                      <button onClick={()=>void heartbeat(s.id)} className="button-secondary ml-auto">Test connection</button>
                     </div>
                     <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                      <State label="IP ADDRESS" value={s.ip_address||"NOT CONFIGURED"}/>
+                      <State label="LAST HEARTBEAT" value={s.last_heartbeat?new Date(s.last_heartbeat).toLocaleTimeString():"NEVER"}/>
+                      <State label="LATENCY" value={s.latency_ms===null?"UNAVAILABLE":`${s.latency_ms} ms`}/>
+                      <State label="LAST COMMAND" value={s.last_command||"NONE"}/>
+                      <State label="COMMAND ACK" value={s.command_acknowledged?"ACKNOWLEDGED":"NOT ACKNOWLEDGED"}/>
                       <State
                         label="GUIDANCE ARM"
                         value={s.hardware_state.arm_state}
@@ -133,6 +140,7 @@ export default function Hardware() {
                   setConfirm({ action: "NORMAL", label: "Normal guidance" })
                 }
                 icon={RotateCcw}
+                disabled={!f.sentinels.some(s=>s.connected)}
               />
               {f.exits
                 .filter(
@@ -153,6 +161,7 @@ export default function Hardware() {
                       })
                     }
                     icon={RadioTower}
+                    disabled={!f.sentinels.some(s=>s.connected)}
                   />
                 ))}
               <Control
@@ -161,6 +170,7 @@ export default function Hardware() {
                   setConfirm({ action: "CRITICAL", label: "Critical response" })
                 }
                 icon={ShieldAlert}
+                disabled={!f.sentinels.some(s=>s.connected)}
               />
               <Control
                 label="Reset hardware state"
@@ -168,6 +178,7 @@ export default function Hardware() {
                   setConfirm({ action: "RESET", label: "Hardware reset" })
                 }
                 icon={RotateCcw}
+                disabled={!f.sentinels.some(s=>s.connected)}
               />
             </div>
             {feedback && (
@@ -238,15 +249,18 @@ function Control({
   label,
   onClick,
   icon: Icon,
+  disabled=false,
 }: {
   label: string;
   onClick: () => void;
   icon: typeof RotateCcw;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex min-h-24 flex-col items-start justify-between bg-card p-4 text-left hover:bg-muted/30"
+      disabled={disabled}
+      className="flex min-h-24 flex-col items-start justify-between bg-card p-4 text-left hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <Icon size={16} className="text-primary" />
       <span className="data-mono text-[9px] text-foreground">{label}</span>

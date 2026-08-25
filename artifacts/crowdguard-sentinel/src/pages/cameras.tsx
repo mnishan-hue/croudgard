@@ -122,6 +122,7 @@ export default function Cameras() {
                 camera={camera}
                 zones={zones}
                 provider={snapshot.ai_provider}
+                reporting={snapshot.reporting_camera_ids.includes(camera.id)}
               />
             ))}
             {filtered.length === 0 && (
@@ -140,10 +141,12 @@ function CameraCard({
   camera,
   zones,
   provider,
+  reporting,
 }: {
   camera: Camera;
   zones: Zone[];
   provider: string;
+  reporting: boolean;
 }) {
   const assigned = zones.filter((zone) => camera.zone_ids.includes(zone.id));
   const metrics = assigned.sort((a, b) => b.risk - a.risk)[0];
@@ -162,7 +165,7 @@ function CameraCard({
         <span
           className={`absolute left-3 top-3 rounded-full border px-2 py-1 text-[9px] ${online ? "border-secondary/40 bg-secondary/10 text-secondary" : "border-destructive/40 bg-destructive/10 text-destructive"}`}
         >
-          {online ? "Ready for analysis" : "Unavailable"}
+          {reporting ? "Reporting live" : online ? "Waiting for worker" : "Unavailable"}
         </span>
         <span className="absolute right-3 top-3 rounded-full border border-border bg-background/80 px-2 py-1 text-[9px] text-primary">
           Live camera AI
@@ -193,16 +196,16 @@ function CameraCard({
           <Metric
             icon={Users}
             label="PEOPLE"
-            value={String(metrics?.metrics.people_count ?? "—")}
+            value={reporting?String(metrics?.metrics.people_count ?? 0):"—"}
           />
           <Metric
             icon={Signal}
             label="DENSITY"
-            value={metrics ? `${Math.round(metrics.metrics.density)}%` : "—"}
+            value={reporting&&metrics ? `${Math.round(metrics.metrics.density)}` : "—"}
           />
           <Metric
             label="RISK"
-            value={metrics ? `${Math.round(metrics.risk)}%` : "—"}
+            value={reporting&&metrics ? `${Math.round(metrics.risk)}` : "—"}
           />
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">

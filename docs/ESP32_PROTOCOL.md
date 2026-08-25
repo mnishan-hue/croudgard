@@ -1,15 +1,41 @@
-# ESP32 protocol
+# ESP32 HTTP protocol
 
-The frontend calls FastAPI; it never addresses ESP32. A future `ESP32Client` sends validated JSON over the local network.
+The frontend never addresses the ESP32. FastAPI is the only command sender.
+
+Configure each Sentinel with a unique `device_id` and `ip_address`, then press **Test connection** on the Hardware page.
+
+## Heartbeat
+
+`GET /status`
 
 ```json
-{"type":"SET_STATE","sentinel_id":"sentinel_01","action":"REDIRECT_TO_EXIT","recommended_exit_id":"exit_b","blocked_route_id":"route_a","display_message":"USE EXIT B","audio":"FOLLOW_ILLUMINATED_ROUTE"}
+{"device_id":"cg-sentinel-01","status":"ready"}
+```
+
+The returned device ID must match configuration.
+
+## Command
+
+`POST /command`
+
+```json
+{"type":"SET_STATE","device_id":"cg-sentinel-01","command":"REDIRECT_TO_EXIT","recommended_exit_id":"exit_b"}
 ```
 
 Acknowledgement:
 
 ```json
-{"sentinel_id":"sentinel_01","connected":true,"arm_state":"BLOCK_ROUTE","display_message":"USE EXIT B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}
+{"acknowledged":true,"hardware_state":{"arm_state":"BLOCK_ROUTE","display_message":"USE EXIT B →","audio":"PLEASE_USE_EXIT_B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}}
 ```
 
-Allowed LED values are `NORMAL`, `GREEN_GUIDANCE`, `YELLOW_CAUTION`, `RED_RESTRICTED`, and `OFF`. The arm is stationary-base guidance with `NORMAL` or `BLOCK_ROUTE`; an exit/route ID supplies prototype-specific direction. Audio commands include `NONE`, `FOLLOW_ILLUMINATED_ROUTE`, `AREA_AHEAD_CONGESTED`, `PLEASE_WAIT`, and `THANK_YOU`.
+Commands are `NORMAL`, `REDIRECT_TO_EXIT`, `CRITICAL`, and `RESET`. Exit IDs are dynamic; firmware maps configured exit IDs to servo positions, WS2812B routes, display arrows, and DFPlayer tracks.
+
+Recommended physical behavior:
+
+- Redirect: block the congested-side guidance arm position, restricted exit LEDs red, recommended route green/animated, display the recommended exit, then play the matching guidance audio.
+- Normal: neutral arm, soft normal LEDs, normal-flow display, no audio.
+- Critical: neutral safe arm, caution pattern, “PLEASE WAIT / FOLLOW STAFF”, caution audio. Never physically close emergency egress.
+
+FastAPI requires `acknowledged: true`. It records latency, heartbeat, last command, acknowledgement, and returned hardware state. A missing acknowledgement fails the command rather than pretending it succeeded.
+
+Manual tests use the Hardware page after a successful heartbeat. Automatic mode can be enabled only when at least one Sentinel is connected.

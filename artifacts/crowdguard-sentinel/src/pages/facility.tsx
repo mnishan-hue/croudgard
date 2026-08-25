@@ -162,6 +162,9 @@ export default function FacilityConfiguration() {
   async function addSentinel() {
     const name = window.prompt("Sentinel name");
     if (!name || !facility!.junctions.length) return;
+    const deviceId = window.prompt("ESP32 device ID", slug(name));
+    if (!deviceId) return;
+    const ipAddress = window.prompt("ESP32 address (example: 192.168.1.80)", "");
     await apiFetch("/sentinels", {
       method: "POST",
       body: JSON.stringify({
@@ -169,7 +172,8 @@ export default function FacilityConfiguration() {
         name,
         junction_id: facility!.junctions[0].id,
         nearby_exit_ids: [],
-        device_id: "unconfigured",
+        device_id: deviceId,
+        ip_address: ipAddress || "",
         connected: false,
       }),
     });

@@ -58,25 +58,22 @@ export default function CameraDetail() {
     );
 
   const metrics = primary?.metrics;
+  const reporting = snapshot.reporting_camera_ids.includes(camera.id);
   const values: [string, string, string?][] = [
-    ["Crowd condition", humanize(primary?.crowd_state ?? "NO DATA")],
-    ["People detected", formatNumber(metrics?.people_count)],
-    ["Area density", formatNumber(metrics?.density, "%")],
-    ["Average walking speed", formatNumber(metrics?.average_speed, " m/s", 2)],
-    [
-      "Flow direction",
-      numberOrNull(metrics?.direction_conflict) !== null &&
-      numberOrNull(metrics?.direction_conflict)! > 35
-        ? "Conflicting"
-        : "Mostly consistent",
-    ],
-    ["People entering", formatNumber(metrics?.inflow, " / min")],
-    ["People leaving", formatNumber(metrics?.outflow, " / min")],
-    ["People stopped", formatNumber(metrics?.stopped_percentage, "%")],
-    ["Queue change", formatNumber(metrics?.queue_growth, " / min", 2)],
-    ["Direction conflict", formatNumber(metrics?.direction_conflict, "%")],
-    ["Ripple score", formatNumber(metrics?.ripple_score, " / 100")],
-    ["Current risk", formatNumber(primary?.risk, " / 100")],
+    ["Crowd condition", reporting?humanize(primary?.crowd_state ?? "NO DATA"):"—"],
+    ["People detected", reporting?formatNumber(metrics?.people_count):"—"],
+    ["Density score", reporting?formatNumber(metrics?.density, " / 100"):"—"],
+    ["Tracker speed", reporting&&metrics?.available_metrics.includes("movement")?formatNumber(metrics.average_speed, " px/s", 1):"Unavailable"],
+    ["Movement direction", reporting&&metrics?.movement_direction?humanize(metrics.movement_direction):"Unavailable"],
+    ["People entering", reporting&&metrics?.available_metrics.includes("inflow")?formatNumber(metrics.inflow):"Unavailable"],
+    ["People leaving", reporting&&metrics?.available_metrics.includes("outflow")?formatNumber(metrics.outflow):"Unavailable"],
+    ["People stopped", reporting&&metrics?.available_metrics.includes("stopped_percentage")?formatNumber(metrics.stopped_percentage, "%"):"Unavailable"],
+    ["Queue growth", reporting&&metrics?.available_metrics.includes("queue_growth")?formatNumber(metrics.queue_growth, " people/s", 2):"Unavailable"],
+    ["Direction conflict", reporting&&metrics?.available_metrics.includes("direction_conflict")?formatNumber(metrics?.direction_conflict, "%"):"Unavailable"],
+    ["Movement disturbance", reporting&&metrics?.experimental_metrics.includes("movement_disturbance")?`${humanize(snapshot.prediction.ripple_state)} · experimental`:"Unavailable"],
+    ["Current risk", reporting?formatNumber(primary?.risk, " / 100"):"—"],
+    ["Processing rate", reporting&&metrics?.fps?formatNumber(metrics.fps, " FPS", 1):"—"],
+    ["Trend", reporting?humanize(metrics?.trend??"UNAVAILABLE"):"—"],
   ];
 
   const online = camera.enabled && camera.status === "ONLINE";
@@ -98,13 +95,15 @@ export default function CameraDetail() {
           icon={online ? CircleCheck : CircleOff}
           label="Camera status"
           value={
-            online
-              ? "Online and ready"
+            reporting
+              ? "Reporting live metrics"
+              : online
+                ? "Configured · waiting for worker"
               : camera.enabled
                 ? humanize(camera.status)
                 : "Disabled"
           }
-          tone={online ? "good" : "bad"}
+          tone={reporting ? "good" : online ? "neutral" : "bad"}
         />
         <Summary
           icon={MapPin}
@@ -116,8 +115,8 @@ export default function CameraDetail() {
         <Summary
           icon={ShieldCheck}
           label="AI analysis"
-          value={camera.ai_enabled ? humanize(snapshot.ai_mode) : "Disabled"}
-          tone={camera.ai_enabled ? "good" : "neutral"}
+          value={camera.ai_enabled ? reporting ? "Reporting live" : "Ready for live camera" : "Disabled"}
+          tone={reporting ? "good" : "neutral"}
         />
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
@@ -135,7 +134,11 @@ export default function CameraDetail() {
               ["AI provider", snapshot.ai_provider || "Not reported"],
               [
                 "AI confidence",
-                formatNumber(snapshot.prediction?.confidence, "%"),
+                !reporting
+                  ? "Unavailable"
+                  : metrics?.people_count === 0
+                    ? "No people detected"
+                    : formatNumber(metrics?.confidence, "%"),
               ],
               [
                 "Assigned zones",

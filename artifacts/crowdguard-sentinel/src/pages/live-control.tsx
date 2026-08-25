@@ -25,6 +25,7 @@ import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
 import type { BackendSnapshot } from "@/types/sentinel";
 import { TeachableCamera } from "@/components/teachable-camera";
+import { LiveCameraGrid } from "@/components/live-camera-grid";
 
 export default function LiveControl() {
   const { snapshot, connection, refresh } = useSentinel();
@@ -241,6 +242,9 @@ export default function LiveControl() {
           <TeachableCamera cameraId={liveCamera.id} />
         </Panel>
       )}
+      <Panel title="Camera network" eyebrow={`${snapshot.reporting_camera_ids.length} OF ${facility.cameras.filter((camera)=>camera.enabled).length} REPORTING`} className="mb-5">
+        <div className="p-3"><LiveCameraGrid snapshot={snapshot}/></div>
+      </Panel>
       <div
         className={`${hasLiveAI ? "grid" : "hidden"} gap-5 xl:grid-cols-[1.45fr_1fr]`}
       >

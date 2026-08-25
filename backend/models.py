@@ -33,6 +33,14 @@ class ZoneMetrics(BaseModel):
     ripple_score: float = 0
     risk: float = 0
     confidence: float = 0
+    fps: float = 0
+    movement_direction: str | None = None
+    direction_variance: float | None = None
+    crowd_accumulation: float = 0
+    congestion_score: float = 0
+    trend: Literal["RISING", "STABLE", "FALLING", "UNAVAILABLE"] = "UNAVAILABLE"
+    available_metrics: list[str] = Field(default_factory=list)
+    experimental_metrics: list[str] = Field(default_factory=list)
 
 
 class Camera(BaseModel):
@@ -107,7 +115,13 @@ class Sentinel(BaseModel):
     junction_id: str
     nearby_exit_ids: list[str] = Field(default_factory=list)
     device_id: str
+    ip_address: str = ""
+    protocol: Literal["HTTP"] = "HTTP"
     connected: bool = False
+    last_heartbeat: str | None = None
+    last_command: str | None = None
+    command_acknowledged: bool = False
+    latency_ms: float | None = None
     hardware_state: HardwareState = Field(default_factory=HardwareState)
 
 
@@ -202,6 +216,31 @@ class CrowdClassificationObservation(BaseModel):
     classification: Literal["LOW_OR_EMPTY", "NORMAL_FLOW", "BUILDING_CONGESTION", "HIGH_CONGESTION"]
     confidence: float = Field(ge=0, le=1)
     captured_at: str = Field(default_factory=utc_now)
+
+
+class ComputerVisionObservation(BaseModel):
+    camera_id: str
+    captured_at: str = Field(default_factory=utc_now)
+    people_count: int = Field(ge=0, le=10000)
+    detection_confidence: float = Field(ge=0, le=1)
+    fps: float = Field(ge=0, le=240)
+    density_score: float = Field(ge=0, le=100)
+    occupied_area_ratio: float = Field(ge=0, le=1)
+    average_speed_px_s: float | None = Field(default=None, ge=0)
+    speed_band: Literal["SLOW", "NORMAL", "FAST", "UNAVAILABLE"] = "UNAVAILABLE"
+    movement_direction: Literal["LEFT", "RIGHT", "UP", "DOWN", "MIXED", "STATIONARY", "UNAVAILABLE"] = "UNAVAILABLE"
+    direction_variance: float | None = Field(default=None, ge=0, le=1)
+    direction_conflict: float | None = Field(default=None, ge=0, le=100)
+    inflow: float | None = Field(default=None, ge=0)
+    outflow: float | None = Field(default=None, ge=0)
+    stopped_percentage: float | None = Field(default=None, ge=0, le=100)
+    queue_growth: float | None = None
+    crowd_accumulation: float | None = None
+    congestion_score: float = Field(ge=0, le=100)
+    risk_score: float = Field(ge=0, le=100)
+    trend: Literal["RISING", "STABLE", "FALLING", "UNAVAILABLE"] = "UNAVAILABLE"
+    disturbance: Literal["NONE", "LOCAL", "SPREADING", "HIGH", "UNAVAILABLE"] = "UNAVAILABLE"
+    tracked_people: int = Field(ge=0, le=10000)
 
 
 class ManualControlRequest(BaseModel):

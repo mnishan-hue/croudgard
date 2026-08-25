@@ -33,8 +33,10 @@ class DecisionEngine:
         affected = max(enabled, key=lambda zone: zone.risk, default=None)
         ranking = self.ranker.rank(exits, zones)
         risk = affected.risk if affected else 0
+        usable_exits = [exit_ for exit_ in exits if exit_.enabled and exit_.status not in {"CLOSED", "RESTRICTED"}]
+        no_clear_route = bool(usable_exits) and all(exit_.risk >= 75 for exit_ in usable_exits)
         if risk < 45:
             return Decision(action="NORMAL", affected_zone_id=affected.id if affected else None, reason="Crowd flow is within configured operating thresholds.", exit_ranking=ranking)
-        if risk >= 90:
-            return Decision(action="CRITICAL", recommended_exit_id=ranking[0]["exit_id"] if ranking else None, affected_zone_id=affected.id, reason="Critical crowd risk requires operator and venue safety response.", exit_ranking=ranking)
+        if risk >= 90 or no_clear_route:
+            return Decision(action="CRITICAL", recommended_exit_id=None if no_clear_route else ranking[0]["exit_id"] if ranking else None, affected_zone_id=affected.id, reason="No clear monitored route is available; operator and venue safety response is required." if no_clear_route else "Critical crowd risk requires operator and venue safety response.", exit_ranking=ranking)
         return Decision(action="REDIRECT_TO_EXIT", recommended_exit_id=ranking[0]["exit_id"] if ranking else None, affected_zone_id=affected.id, reason=f"{affected.name} has the highest developing risk; the lowest-scoring available exit is recommended.", exit_ranking=ranking)

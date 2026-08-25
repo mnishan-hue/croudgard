@@ -40,7 +40,7 @@ function adapt(snapshot: BackendSnapshot): DashboardState {
       name: camera.name,
       zone: assigned.map((zone) => zone.name).join(", ") || "Unassigned",
       online: reporting.has(camera.id),
-      fps: 0,
+      fps: reporting.has(camera.id) ? (metrics?.fps ?? 0) : 0,
       peopleDetected: metrics?.people_count ?? 0,
       density: Math.round(metrics?.density ?? 0),
       resolution: camera.source || "Browser camera",
@@ -109,7 +109,6 @@ function adapt(snapshot: BackendSnapshot): DashboardState {
         ? (hardware?.led_routes[f.exits[1].id] ?? "N/A")
         : "N/A",
       audio: hardware?.audio ?? "NONE",
-      beacon: "REMOVED",
     },
     events: snapshot.events.map((event) => ({
       timestamp: new Date(event.timestamp).toLocaleTimeString(),

@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, CrowdClassificationObservation, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
+from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
 from backend.service import CrowdGuardService
 from backend.store import SQLiteStore
 
@@ -93,6 +93,14 @@ def person_count(observation: PersonCountObservation):
 def crowd_observation(observation: CrowdClassificationObservation):
     try:
         return service.record_crowd_observation(observation)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/ai/cv-observation")
+def cv_observation(observation: ComputerVisionObservation):
+    try:
+        return service.record_cv_observation(observation)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -230,6 +238,16 @@ def delete_exit(exit_id: str):
 def sentinels(): return active().sentinels
 
 
+@app.post("/api/hardware/{sentinel_id}/heartbeat")
+def hardware_heartbeat(sentinel_id: str):
+    try:
+        return service.heartbeat(sentinel_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(503, f"Sentinel heartbeat failed: {exc}") from exc
+
+
 @app.post("/api/junctions", status_code=201)
 def add_junction(junction: Junction):
     facility=active()
@@ -305,7 +323,12 @@ def manual_control(request: ManualControlRequest):
     if sentinel and not sentinel.connected: raise HTTPException(422,"Selected Sentinel is not connected")
     if request.action=="REDIRECT_TO_EXIT" and not any(x.id==request.recommended_exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits): raise HTTPException(422,"Recommended exit is not available")
     if not sentinel: raise HTTPException(422,"No Sentinel configured")
-    service.hardware.set_state(sentinel,request.model_dump()); store.set_setting("automatic_control","false"); store.save_facility(facility); store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if request.action=="CRITICAL" else "WARNING",message=f"Manual {request.action} command sent to {sentinel.name}")); return service.snapshot()
+    try:
+        decision=Decision(action=request.action,recommended_exit_id=request.recommended_exit_id,reason="Manual operator command")
+        service.dispatch_decision(decision,sentinel.id,force=True)
+    except ConnectionError as exc:
+        raise HTTPException(503,str(exc)) from exc
+    store.set_setting("automatic_control","false"); store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if request.action=="CRITICAL" else "WARNING",message=f"Manual {request.action} command sent to {sentinel.name}")); return service.snapshot()
 
 
 

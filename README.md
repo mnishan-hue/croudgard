@@ -35,6 +35,25 @@ pnpm --filter @workspace/crowdguard-sentinel dev
 
 Open `http://localhost:5173`. API documentation is at `http://localhost:8000/docs`. Configuration defaults to `VITE_API_BASE_URL=/api` for a reverse proxy; for separate local servers set `VITE_API_BASE_URL=http://localhost:8000/api`. WebSocket defaults to `ws://localhost:8000/ws/live`.
 
+## Run real computer vision
+
+Install the optional local AI dependencies once:
+
+```powershell
+python -m venv C:\cg-ai-venv
+C:\cg-ai-venv\Scripts\python.exe -m pip install -r backend\requirements-ai.txt
+```
+
+Then run one independent YOLO + ByteTrack worker per configured camera:
+
+```powershell
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_main --source 0 --preview
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_a --source 1 --counting-line-y 0.55 --preview
+C:\cg-ai-venv\Scripts\python.exe -m backend.cv.worker --camera-id cam_exit_b --source 2 --counting-line-y 0.55 --preview
+```
+
+Sources may be webcam/USB indices, RTSP URLs, or local video paths. See [AI pipeline](docs/AI_PIPELINE.md), [camera setup](docs/CAMERA_SETUP.md), [crowd metrics](docs/CROWD_METRICS.md), and [ESP32 protocol](docs/ESP32_PROTOCOL.md).
+
 ## Live data and facilities
 
 The system starts with an empty operational state. Browser camera inference posts person counts and crowd classifications to FastAPI; readings expire after 10 seconds without a new observation. Exit guidance is withheld until every enabled exit has a current assigned-camera observation. Facility Configuration can add, enable, disable, and remove cameras and exits. SQLite retains topology, while live measurements stay in memory and are never restored as current after a restart.

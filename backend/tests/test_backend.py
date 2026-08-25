@@ -60,7 +60,8 @@ def test_camera_classification_updates_zone_risk_and_exit_decision(tmp_path):
     api=client(tmp_path)
     response=api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.92})
     assert response.status_code==200
-    assert response.json()["smoothed_risk"]==86
+    assert response.json()["smoothed_risk"]==44.9
+    for _ in range(2): api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.92})
     snapshot=api.get("/api/system").json()
     zone=next(item for item in snapshot["facility"]["zones"] if item["id"]=="zone_exit_a")
     assert zone["risk"]==86 and zone["metrics"]["confidence"]==92
@@ -76,6 +77,49 @@ def test_camera_classification_rejects_weak_and_unknown_observations(tmp_path):
     api=client(tmp_path)
     assert api.post("/api/ai/crowd-observation",json={"camera_id":"cam_main","classification":"NORMAL_FLOW","confidence":.4}).status_code==422
     assert api.post("/api/ai/crowd-observation",json={"camera_id":"missing","classification":"NORMAL_FLOW","confidence":.9}).status_code==422
+
+
+def test_computer_vision_observation_populates_real_metrics(tmp_path):
+    api=client(tmp_path)
+    observation={"camera_id":"cam_main","people_count":6,"tracked_people":6,"detection_confidence":.91,"fps":18.5,"density_score":32,"occupied_area_ratio":.18,"average_speed_px_s":24,"speed_band":"NORMAL","movement_direction":"RIGHT","direction_variance":.2,"direction_conflict":10,"stopped_percentage":12,"queue_growth":.4,"crowd_accumulation":.4,"congestion_score":38,"risk_score":42,"trend":"RISING","disturbance":"LOCAL"}
+    response=api.post("/api/ai/cv-observation",json=observation)
+    assert response.status_code==200
+    snapshot=api.get("/api/system").json()
+    zone=next(item for item in snapshot["facility"]["zones"] if item["id"]=="zone_main")
+    assert zone["metrics"]["people_count"]==6
+    assert zone["metrics"]["density"]==32
+    assert zone["metrics"]["movement_direction"]=="RIGHT"
+    assert zone["metrics"]["fps"]==18.5
+
+
+def test_single_high_cv_frame_does_not_trigger_intervention(tmp_path):
+    api=client(tmp_path)
+    observation={"camera_id":"cam_exit_a","people_count":20,"tracked_people":20,"detection_confidence":.9,"fps":20,"density_score":80,"occupied_area_ratio":.5,"congestion_score":85,"risk_score":90}
+    response=api.post("/api/ai/cv-observation",json=observation).json()
+    assert response["smoothed_risk"]==44.9
+    assert response["snapshot"]["decision"]["action"]=="NORMAL"
+
+
+def test_cv_exit_flow_is_used_by_route_ranking(tmp_path):
+    api=client(tmp_path)
+    crowded={"people_count":18,"tracked_people":18,"detection_confidence":.9,"fps":20,"density_score":65,"occupied_area_ratio":.4,"congestion_score":70,"risk_score":70}
+    for _ in range(3):
+        assert api.post("/api/ai/cv-observation",json={"camera_id":"cam_exit_a","inflow":100,"outflow":0,**crowded}).status_code==200
+        assert api.post("/api/ai/cv-observation",json={"camera_id":"cam_exit_b","inflow":0,"outflow":0,**crowded}).status_code==200
+    snapshot=api.get("/api/system").json()
+    exits={item["id"]:item for item in snapshot["facility"]["exits"]}
+    assert exits["exit_a"]["current_inflow"]==100
+    assert snapshot["decision"]["exit_ranking"][0]["exit_id"]=="exit_b"
+
+
+def test_cv_prediction_explains_measured_signals(tmp_path):
+    api=client(tmp_path)
+    observation={"camera_id":"cam_main","people_count":6,"tracked_people":6,"detection_confidence":.91,"fps":18.5,"density_score":32,"occupied_area_ratio":.18,"average_speed_px_s":24,"movement_direction":"MIXED","direction_variance":.5,"direction_conflict":20,"inflow":8,"outflow":3,"stopped_percentage":12,"queue_growth":.4,"congestion_score":38,"risk_score":42,"trend":"RISING","disturbance":"LOCAL"}
+    assert api.post("/api/ai/cv-observation",json=observation).status_code==200
+    prediction=api.get("/api/system").json()["prediction"]
+    assert prediction["ripple_state"]=="LOCAL"
+    assert {item["signal"] for item in prediction["explanations"]}=={"Density score","Congestion score","Direction conflict","Net line crossings"}
+    assert abs(sum(item["contribution"] for item in prediction["explanations"])-1)<.01
 
 
 def test_dynamic_camera_and_exit(tmp_path):
@@ -106,6 +150,18 @@ def test_exit_ranking_ignores_closed():
     assert [item["exit_id"] for item in ranking]==["exit_a"]
 
 
+def test_decision_does_not_route_to_another_congested_exit():
+    from backend.decision import DecisionEngine
+    from backend.facilities import competition_facility
+    facility=competition_facility()
+    for zone in facility.zones:
+        if zone.type=="EXIT": zone.risk=86
+    for exit_ in facility.exits: exit_.risk=86; exit_.status="CONGESTED"
+    decision=DecisionEngine().decide(facility.zones,facility.exits)
+    assert decision.action=="CRITICAL"
+    assert decision.recommended_exit_id is None
+
+
 def test_unconfigured_hardware_does_not_fake_commands():
     from backend.hardware.unconfigured import UnconfiguredHardwareClient
     from backend.facilities import competition_facility
@@ -130,7 +186,7 @@ def test_automatic_control_and_intervention_effectiveness(tmp_path):
     api=client(tmp_path)
     assert api.post("/api/control/auto",json={"enabled":False}).json()["automatic_control"] is False
     assert api.post("/api/control/auto",json={"enabled":True}).status_code==422
-    api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.95})
+    for _ in range(3): api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.95})
     active=api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_b","classification":"LOW_OR_EMPTY","confidence":.95}).json()["snapshot"]
     assert active["intervention"]["status"]=="ACTIVE"
     cleared=api.post("/api/system/clear-live-data").json()

@@ -58,7 +58,6 @@ export interface RobotAction {
   exitALights: string;
   exitBLights: string;
   audio: string;
-  beacon: string;
 }
 export interface EventLog {
   timestamp: string;
@@ -129,7 +128,6 @@ export function getNoDataState(): DashboardState {
       exitALights: "N/A",
       exitBLights: "N/A",
       audio: "NONE",
-      beacon: "REMOVED",
     },
     system: {
       timestamp: "—",

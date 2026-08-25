@@ -19,6 +19,14 @@ export interface ZoneMetrics {
   ripple_score: number;
   risk: number;
   confidence: number;
+  fps: number;
+  movement_direction: string | null;
+  direction_variance: number | null;
+  crowd_accumulation: number;
+  congestion_score: number;
+  trend: "RISING" | "STABLE" | "FALLING" | "UNAVAILABLE";
+  available_metrics: string[];
+  experimental_metrics: string[];
 }
 export interface Camera {
   id: string;
@@ -86,7 +94,13 @@ export interface Sentinel {
   junction_id: string;
   nearby_exit_ids: string[];
   device_id: string;
+  ip_address: string;
+  protocol: "HTTP";
   connected: boolean;
+  last_heartbeat: string | null;
+  last_command: string | null;
+  command_acknowledged: boolean;
+  latency_ms: number | null;
   hardware_state: HardwareState;
 }
 export interface Facility {
