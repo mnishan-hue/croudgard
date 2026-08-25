@@ -1,5 +1,7 @@
 # Facility configuration
 
-The seeded Competition Prototype represents the physical demonstration. Large Venue Demo proves that software logic accepts larger arrays. Use Facility Configuration or REST CRUD endpoints to add cameras, zones, and exits. IDs must be unique within the active facility; an exit must reference an existing zone. Camera `zone_ids` and zone `camera_ids` permit multiple cameras per zone and multiple zones per camera.
+The default Competition Facility contains topology only: three cameras, three zones, two exits, one junction, and one unconfigured Sentinel. All counts, risks, flow values, events, and recommendations start empty.
 
-Exit ranking excludes disabled, closed, and restricted exits. Scores combine risk, density, queue growth, flow/capacity pressure, and availability; lower is safer. Adding exits therefore requires no A/B conditional logic.
+Use Facility Configuration or the REST CRUD endpoints to add cameras, zones, exits, junctions, and Sentinels. Camera `zone_ids` and zone `camera_ids` support multiple cameras per zone and multiple zones per camera. An exit must reference an existing zone and its assigned cameras must exist.
+
+Exit ranking excludes disabled, closed, and restricted exits. Route guidance is withheld until every enabled exit has at least one current camera classification. Once coverage is complete, lower scores are safer and combine observed exit risk with configured capacity and availability.

@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, CrowdClassificationObservation, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, ScenarioRequest, Sentinel, Zone, utc_now
-from backend.service import CrowdGuardService, SCENARIOS
+from backend.models import AutoControlRequest, Camera, CrowdClassificationObservation, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
+from backend.service import CrowdGuardService
 from backend.store import SQLiteStore
 
 DB_PATH = os.getenv("CROWDGUARD_DB_PATH", str(Path(__file__).parent / "crowdguard.db"))
@@ -33,7 +32,8 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     facility=service.facility
-    return {"status": "ONLINE", "database": "ONLINE" if facility else "ERROR", "active_facility": facility.id if facility else None, "ai": service.ai.get_health(), "mode": "DEMO MODE", "esp32": "MOCK CONNECTED"}
+    connected = bool(facility and any(item.connected for item in facility.sentinels))
+    return {"status": "ONLINE", "database": "ONLINE" if facility else "ERROR", "active_facility": facility.id if facility else None, "ai": service.ai.get_health(), "mode": "LIVE CAMERA", "sentinel_hardware": "CONNECTED" if connected else "NOT CONFIGURED"}
 
 
 @app.get("/api/system")
@@ -56,7 +56,7 @@ def facility(facility_id: str):
 def create_facility(value: Facility): return store.save_facility(value)
 
 
-@app.post("/api/demo/facility/{facility_id}")
+@app.post("/api/facilities/{facility_id}/activate")
 def select_facility(facility_id: str):
     if not store.get_facility(facility_id): raise HTTPException(404, "Facility not found")
     service.cancel_transitions(); store.set_setting("active_facility", facility_id)
@@ -64,21 +64,8 @@ def select_facility(facility_id: str):
     return service.snapshot()
 
 
-@app.post("/api/demo/scenario")
-def scenario(request: ScenarioRequest):
-    try:
-        if request.scenario.upper() not in SCENARIOS: raise ValueError("Unknown scenario")
-        if request.timed:
-            transition_id=service.begin_transition()
-            threading.Thread(target=service.run_transition,args=(request.scenario,request.target_id,.7,transition_id),daemon=True).start()
-            return service.snapshot()
-        service.cancel_transitions()
-        return service.apply_scenario(request.scenario, request.target_id)
-    except ValueError as exc: raise HTTPException(422, str(exc)) from exc
-
-
-@app.post("/api/demo/reset")
-def reset_demo(): return service.reset_demo()
+@app.post("/api/system/clear-live-data")
+def clear_live_data(): return service.clear_live_data()
 
 
 @app.post("/api/events/acknowledge")
@@ -303,7 +290,11 @@ def events(limit: int = 100): return store.events(min(500,max(1,limit)))
 
 
 @app.post("/api/control/auto")
-def auto_control(request: AutoControlRequest): store.set_setting("automatic_control",str(request.enabled).lower()); return service.snapshot()
+def auto_control(request: AutoControlRequest):
+    if request.enabled and not any(sentinel.connected for sentinel in active().sentinels):
+        raise HTTPException(422, "Automatic guidance requires at least one connected Sentinel")
+    store.set_setting("automatic_control",str(request.enabled).lower())
+    return service.snapshot()
 
 
 @app.post("/api/control/manual")
@@ -311,6 +302,7 @@ def manual_control(request: ManualControlRequest):
     facility=active()
     sentinel=next((x for x in facility.sentinels if x.id==request.sentinel_id),None) if request.sentinel_id else (facility.sentinels[0] if facility.sentinels else None)
     if request.sentinel_id and not sentinel: raise HTTPException(404,"Sentinel not found")
+    if sentinel and not sentinel.connected: raise HTTPException(422,"Selected Sentinel is not connected")
     if request.action=="REDIRECT_TO_EXIT" and not any(x.id==request.recommended_exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits): raise HTTPException(422,"Recommended exit is not available")
     if not sentinel: raise HTTPException(422,"No Sentinel configured")
     service.hardware.set_state(sentinel,request.model_dump()); store.set_setting("automatic_control","false"); store.save_facility(facility); store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if request.action=="CRITICAL" else "WARNING",message=f"Manual {request.action} command sent to {sentinel.name}")); return service.snapshot()

@@ -1,25 +1,235 @@
-import { BrainCircuit, ChevronRight, ShieldAlert, Waves } from 'lucide-react';
-import { useSentinel } from '@/hooks/use-sentinel';
-import { PageIntro, Panel } from '@/components/sentinel-shell';
+import { BrainCircuit, ChevronRight, ShieldAlert, Waves } from "lucide-react";
+import { useSentinel } from "@/hooks/use-sentinel";
+import { PageIntro, Panel } from "@/components/sentinel-shell";
 
-const humanize=(value:string)=>value.replaceAll('_',' ').toLowerCase().replace(/^./,(letter)=>letter.toUpperCase());
+const humanize = (value: string) =>
+  value
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/^./, (letter) => letter.toUpperCase());
 
 export default function Intelligence() {
   const { state, snapshot } = useSentinel();
   const score = state.analysis.risk;
-  return <div className="enter-rise">
-       <PageIntro eyebrow="Decision explanation" title="AI analysis" description="Understand which signals produced the current risk score and exit recommendation." action={<div className="status-chip text-primary"><BrainCircuit size={14}/><span>{snapshot?.prediction.simulated?'Demo decision model':`${snapshot?.ai_provider??'AI'} provider`}</span></div>} />
-    <div className="grid gap-5 xl:grid-cols-[1fr_1.45fr]">
-      <Panel title="Current crowd state" eyebrow="FUSED OUTPUT">
-        <div className="p-5"><div className="flex items-center gap-4"><div className={`grid h-28 w-28 place-items-center rounded-full border-8 ${score > 80 ? 'border-destructive/70' : score > 55 ? 'border-primary/70' : 'border-secondary/70'}`}><div className="text-center"><div className="data-mono text-[30px] font-semibold text-foreground">{score}</div><div className="text-[8px] text-muted-foreground">risk / 100</div></div></div><div><div className={`text-[13px] font-semibold ${score > 80 ? 'text-destructive' : score > 55 ? 'text-primary' : 'text-secondary'}`}>{humanize(state.analysis.state)}</div><p className="mt-2 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">Confidence is <span className="text-foreground">{state.analysis.confidence}%</span>. {snapshot?.prediction.simulated?`${state.cameras.length} configured cameras are represented by demo data.`:`Calculated from ${state.cameras.length} reporting cameras.`}</p></div></div><div className="mt-6 space-y-3 border-t border-border pt-4">{[['Ripple signal', state.analysis.rippleDetected ? 'Detected' : 'Clear', state.analysis.rippleDetected ? 'text-destructive' : 'text-secondary'], ['Propagation', humanize(state.analysis.propagation), 'text-foreground'], ['Data source', snapshot?.prediction.simulated?'Simulated':'Provider data', 'text-foreground']].map(([label, value, tone]) => <div className="flex justify-between text-[10px]" key={String(label)}><span className="text-muted-foreground">{label}</span><span className={`${tone}`}>{value}</span></div>)}</div></div>
-      </Panel>
-      <Panel title="Signal contribution" eyebrow="WHY THE MODEL MOVED" action={<span className="data-mono text-[9px] text-muted-foreground">WEIGHTED / 100</span>}>
-        <div className="divide-y divide-border">{state.explanations.map((item, index) => <div className="p-4" key={item.signal}><div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2 text-[11px] font-medium"><span className="data-mono text-[9px] text-muted-foreground">0{index + 1}</span>{item.signal}</div><div className="flex items-center gap-3"><span className={`data-mono text-[9px] ${item.status === 'elevated' || item.status === 'slowing' ? 'text-primary' : 'text-secondary'}`}>{item.value} {item.unit}</span><span className="data-mono text-[9px] text-muted-foreground">{item.contribution}%</span></div></div><div className="h-1 bg-muted"><div className={`h-full ${item.status === 'elevated' ? 'bg-destructive' : item.status === 'slowing' ? 'bg-primary' : 'bg-secondary'}`} style={{ width: `${item.contribution * 2.45}%` }} /></div><div className="mt-2 text-[9px] text-muted-foreground">{item.tooltip}</div></div>)}</div>
+  return (
+    <div className="enter-rise">
+      <PageIntro
+        eyebrow="Decision explanation"
+        title="AI analysis"
+        description="Understand which signals produced the current risk score and exit recommendation."
+        action={
+          <div className="status-chip text-primary">
+            <BrainCircuit size={14} />
+            <span>
+              {snapshot?.camera_ai_active
+                ? `${snapshot.ai_provider} reporting`
+                : "Waiting for camera AI"}
+            </span>
+          </div>
+        }
+      />
+      <div className="grid gap-5 xl:grid-cols-[1fr_1.45fr]">
+        <Panel title="Current crowd state" eyebrow="FUSED OUTPUT">
+          <div className="p-5">
+            <div className="flex items-center gap-4">
+              <div
+                className={`grid h-28 w-28 place-items-center rounded-full border-8 ${score > 80 ? "border-destructive/70" : score > 55 ? "border-primary/70" : "border-secondary/70"}`}
+              >
+                <div className="text-center">
+                  <div className="data-mono text-[30px] font-semibold text-foreground">
+                    {score}
+                  </div>
+                  <div className="text-[8px] text-muted-foreground">
+                    risk / 100
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div
+                  className={`text-[13px] font-semibold ${score > 80 ? "text-destructive" : score > 55 ? "text-primary" : "text-secondary"}`}
+                >
+                  {humanize(state.analysis.state)}
+                </div>
+                <p className="mt-2 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">
+                  Confidence is{" "}
+                  <span className="text-foreground">
+                    {state.analysis.confidence}%
+                  </span>
+                  .{" "}
+                  {snapshot?.reporting_camera_ids.length
+                    ? `Calculated from ${snapshot.reporting_camera_ids.length} reporting camera(s).`
+                    : "No current camera classification is available."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 space-y-3 border-t border-border pt-4">
+              {[
+                [
+                  "Ripple signal",
+                  state.analysis.rippleDetected ? "Detected" : "Clear",
+                  state.analysis.rippleDetected
+                    ? "text-destructive"
+                    : "text-secondary",
+                ],
+                [
+                  "Propagation",
+                  humanize(state.analysis.propagation),
+                  "text-foreground",
+                ],
+                [
+                  "Data source",
+                  snapshot?.camera_ai_active
+                    ? "Current camera observations"
+                    : "No current data",
+                  "text-foreground",
+                ],
+              ].map(([label, value, tone]) => (
+                <div
+                  className="flex justify-between text-[10px]"
+                  key={String(label)}
+                >
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className={`${tone}`}>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Panel>
+        <Panel
+          title="Signal contribution"
+          eyebrow="WHY THE MODEL MOVED"
+          action={
+            <span className="data-mono text-[9px] text-muted-foreground">
+              WEIGHTED / 100
+            </span>
+          }
+        >
+          <div className="divide-y divide-border">
+            {state.explanations.map((item, index) => (
+              <div className="p-4" key={item.signal}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-[11px] font-medium">
+                    <span className="data-mono text-[9px] text-muted-foreground">
+                      0{index + 1}
+                    </span>
+                    {item.signal}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`data-mono text-[9px] ${item.status === "elevated" || item.status === "slowing" ? "text-primary" : "text-secondary"}`}
+                    >
+                      {item.value} {item.unit}
+                    </span>
+                    <span className="data-mono text-[9px] text-muted-foreground">
+                      {item.contribution}%
+                    </span>
+                  </div>
+                </div>
+                <div className="h-1 bg-muted">
+                  <div
+                    className={`h-full ${item.status === "elevated" ? "bg-destructive" : item.status === "slowing" ? "bg-primary" : "bg-secondary"}`}
+                    style={{ width: `${item.contribution * 2.45}%` }}
+                  />
+                </div>
+                <div className="mt-2 text-[9px] text-muted-foreground">
+                  {item.tooltip}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+      <div className="mt-5 grid gap-5 xl:grid-cols-[1.35fr_1fr]">
+        <Panel
+          title="Ripple / disturbance field"
+          eyebrow="TEMPORAL PROPAGATION / CENTRAL PLAZA"
+        >
+          <div className="relative h-[280px] overflow-hidden bg-[#101b27] p-5">
+            <div className="absolute inset-0 grid-surface opacity-50" />
+            {state.analysis.rippleDetected ? (
+              <>
+                <div className="absolute left-[48%] top-[52%] h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive bg-destructive/35" />
+                <span className="absolute left-[48%] top-[52%] h-20 w-20 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/45 animate-[ping_3s_ease-out_infinite]" />
+                <span className="absolute left-[48%] top-[52%] h-36 w-36 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/30 animate-[ping_3s_ease-out_700ms_infinite]" />
+                <span className="absolute left-[48%] top-[52%] h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/20 animate-[ping_3s_ease-out_1400ms_infinite]" />
+              </>
+            ) : (
+              <div className="absolute inset-0 grid place-items-center">
+                <div className="text-center">
+                  <Waves size={30} className="mx-auto text-secondary/60" />
+                  <div className="data-mono mt-3 text-[10px] text-secondary">
+                    NO DISTURBANCE SIGNATURE
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Flow field within expected variance
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="absolute bottom-4 left-5 right-5 flex items-end justify-between">
+              <div>
+                <div className="data-mono text-[9px] uppercase text-muted-foreground">
+                  Signal strength
+                </div>
+                <div
+                  className={`data-mono mt-1 text-[16px] ${state.analysis.rippleDetected ? "text-destructive" : "text-secondary"}`}
+                >
+                  {state.analysis.rippleStrength || "—"}
+                  {state.analysis.rippleDetected && "%"}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="data-mono text-[9px] uppercase text-muted-foreground">
+                  Vector
+                </div>
+                <div className="data-mono mt-1 text-[11px] text-foreground">
+                  {state.analysis.propagation}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+      <Panel
+        title="Risk predictions by zone"
+        eyebrow="NEXT 60 SECONDS"
+        className="mt-5"
+      >
+        <div className="grid gap-px bg-border md:grid-cols-2">
+          {state.predictions.map((prediction) => (
+            <div className="bg-card p-4" key={prediction.zone}>
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] font-semibold">
+                  {prediction.zone}
+                </span>
+                <span
+                  className={`data-mono text-[18px] ${prediction.risk > 75 ? "text-destructive" : prediction.risk > 45 ? "text-primary" : "text-secondary"}`}
+                >
+                  {prediction.risk}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-[10px]">
+                <span className="text-muted-foreground">
+                  {prediction.label} · trend {prediction.trend}
+                </span>
+                <span className="data-mono text-secondary">
+                  Route {prediction.recommendedExit}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
+                <ShieldAlert
+                  size={13}
+                  className={
+                    prediction.risk > 75 ? "text-destructive" : "text-primary"
+                  }
+                />{" "}
+                {prediction.intervention}
+                <ChevronRight size={13} className="ml-auto" />
+              </div>
+            </div>
+          ))}
+        </div>
       </Panel>
     </div>
-    <div className="mt-5 grid gap-5 xl:grid-cols-[1.35fr_1fr]">
-      <Panel title="Ripple / disturbance field" eyebrow="TEMPORAL PROPAGATION / CENTRAL PLAZA"><div className="relative h-[280px] overflow-hidden bg-[#101b27] p-5"><div className="absolute inset-0 grid-surface opacity-50" />{state.analysis.rippleDetected ? <><div className="absolute left-[48%] top-[52%] h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive bg-destructive/35" /><span className="absolute left-[48%] top-[52%] h-20 w-20 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/45 animate-[ping_3s_ease-out_infinite]" /><span className="absolute left-[48%] top-[52%] h-36 w-36 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/30 animate-[ping_3s_ease-out_700ms_infinite]" /><span className="absolute left-[48%] top-[52%] h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full border border-destructive/20 animate-[ping_3s_ease-out_1400ms_infinite]" /></> : <div className="absolute inset-0 grid place-items-center"><div className="text-center"><Waves size={30} className="mx-auto text-secondary/60" /><div className="data-mono mt-3 text-[10px] text-secondary">NO DISTURBANCE SIGNATURE</div><div className="mt-1 text-[10px] text-muted-foreground">Flow field within expected variance</div></div></div>}<div className="absolute bottom-4 left-5 right-5 flex items-end justify-between"><div><div className="data-mono text-[9px] uppercase text-muted-foreground">Signal strength</div><div className={`data-mono mt-1 text-[16px] ${state.analysis.rippleDetected ? 'text-destructive' : 'text-secondary'}`}>{state.analysis.rippleStrength || '—'}{state.analysis.rippleDetected && '%'}</div></div><div className="text-right"><div className="data-mono text-[9px] uppercase text-muted-foreground">Vector</div><div className="data-mono mt-1 text-[11px] text-foreground">{state.analysis.propagation}</div></div></div></div></Panel>
-    </div>
-    <Panel title="Risk predictions by zone" eyebrow="NEXT 60 SECONDS" className="mt-5"><div className="grid gap-px bg-border md:grid-cols-2">{state.predictions.map((prediction) => <div className="bg-card p-4" key={prediction.zone}><div className="flex items-center justify-between"><span className="text-[12px] font-semibold">{prediction.zone}</span><span className={`data-mono text-[18px] ${prediction.risk > 75 ? 'text-destructive' : prediction.risk > 45 ? 'text-primary' : 'text-secondary'}`}>{prediction.risk}</span></div><div className="mt-3 flex items-center justify-between text-[10px]"><span className="text-muted-foreground">{prediction.label} · trend {prediction.trend}</span><span className="data-mono text-secondary">Route {prediction.recommendedExit}</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><ShieldAlert size={13} className={prediction.risk > 75 ? 'text-destructive' : 'text-primary'} /> {prediction.intervention}<ChevronRight size={13} className="ml-auto" /></div></div>)}</div></Panel>
-  </div>;
+  );
 }

@@ -13,14 +13,12 @@ def client(tmp_path):
 
 def test_health_and_snapshot(tmp_path):
     api=client(tmp_path)
-    assert api.get("/api/health").json()["mode"]=="DEMO MODE"
+    assert api.get("/api/health").json()["mode"]=="LIVE CAMERA"
     snapshot=api.get("/api/system").json()
-    assert snapshot["decision"]["recommended_exit_id"]=="exit_b"
-    assert snapshot["prediction"]["simulated"] is True
-
-    assert len(snapshot["risk_timeline"])==len(snapshot["risk_history"])
-    assert any(sample["intervention"] for sample in snapshot["risk_timeline"])
-    assert all(sample["timestamp"] for sample in snapshot["risk_timeline"])
+    assert snapshot["decision"]["recommended_exit_id"] is None
+    assert snapshot["prediction"]["risk"] == 0
+    assert snapshot["camera_ai_active"] is False
+    assert snapshot["risk_timeline"] == snapshot["risk_history"] == []
 
 def test_person_count_updates_assigned_zone(tmp_path):
     api = client(tmp_path)
@@ -66,6 +64,11 @@ def test_camera_classification_updates_zone_risk_and_exit_decision(tmp_path):
     snapshot=api.get("/api/system").json()
     zone=next(item for item in snapshot["facility"]["zones"] if item["id"]=="zone_exit_a")
     assert zone["risk"]==86 and zone["metrics"]["confidence"]==92
+    assert snapshot["decision"]["recommended_exit_id"] is None
+    assert snapshot["exit_coverage_complete"] is False
+    api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_b","classification":"LOW_OR_EMPTY","confidence":.95})
+    snapshot=api.get("/api/system").json()
+    assert snapshot["exit_coverage_complete"] is True
     assert snapshot["decision"]["recommended_exit_id"]=="exit_b"
 
 
@@ -87,15 +90,12 @@ def test_dynamic_camera_and_exit(tmp_path):
     assert len(api.get("/api/exits").json())==3
 
 
-def test_facility_switch_scenario_and_manual_override(tmp_path):
+def test_only_configured_live_facility_is_available(tmp_path):
     api=client(tmp_path)
-    large=api.post("/api/demo/facility/large_venue_demo").json()
-    assert len(large["facility"]["cameras"])==8 and len(large["facility"]["exits"])==4
-    state=api.post("/api/demo/scenario",json={"scenario":"CRITICAL_STATE"}).json()
-    assert state["prediction"]["crowd_state"]=="CRITICAL_CROWD_RISK"
-    best=state["decision"]["recommended_exit_id"]
-    controlled=api.post("/api/control/manual",json={"action":"REDIRECT_TO_EXIT","recommended_exit_id":best}).json()
-    assert controlled["automatic_control"] is False
+    facilities=api.get("/api/facilities").json()
+    assert [item["id"] for item in facilities]==["competition_prototype"]
+    assert api.post("/api/facilities/competition_prototype/activate").status_code==200
+    assert api.post("/api/facilities/missing/activate").status_code==404
 
 
 def test_exit_ranking_ignores_closed():
@@ -106,19 +106,19 @@ def test_exit_ranking_ignores_closed():
     assert [item["exit_id"] for item in ranking]==["exit_a"]
 
 
-def test_mock_hardware_and_intervention():
+def test_unconfigured_hardware_does_not_fake_commands():
+    from backend.hardware.unconfigured import UnconfiguredHardwareClient
     from backend.facilities import competition_facility
-    from backend.hardware.mock_esp32 import MockESP32Client
-    facility=competition_facility(); state=MockESP32Client().set_state(facility.sentinels[0],{"action":"REDIRECT_TO_EXIT","recommended_exit_id":"exit_b"})
-    assert state.led_routes["exit_b"]=="GREEN_GUIDANCE"
-    assert state.arm_state=="BLOCK_ROUTE"
+    import pytest
+    with pytest.raises(ConnectionError):
+        UnconfiguredHardwareClient().set_state(competition_facility().sentinels[0],{"action":"NORMAL"})
 
 
 def test_junction_and_sentinel_crud(tmp_path):
     api=client(tmp_path)
     junction={"id":"junction_extra","name":"Extra Junction","connected_exit_ids":["exit_a"],"sentinel_ids":[],"map_x":40,"map_y":40}
     assert api.post("/api/junctions",json=junction).status_code==201
-    sentinel={"id":"sentinel_extra","name":"Extra Sentinel","junction_id":"junction_extra","nearby_exit_ids":["exit_a"],"device_id":"mock-extra"}
+    sentinel={"id":"sentinel_extra","name":"Extra Sentinel","junction_id":"junction_extra","nearby_exit_ids":["exit_a"],"device_id":"unconfigured","connected":False}
     assert api.post("/api/sentinels",json=sentinel).status_code==201
     assert any(item["id"]=="sentinel_extra" for item in api.get("/api/sentinels").json())
     assert api.delete("/api/junctions/junction_extra").status_code==409
@@ -129,12 +129,13 @@ def test_junction_and_sentinel_crud(tmp_path):
 def test_automatic_control_and_intervention_effectiveness(tmp_path):
     api=client(tmp_path)
     assert api.post("/api/control/auto",json={"enabled":False}).json()["automatic_control"] is False
-    assert api.post("/api/control/auto",json={"enabled":True}).json()["automatic_control"] is True
-    critical=api.post("/api/demo/scenario",json={"scenario":"CRITICAL_STATE"}).json()
-    assert critical["intervention"]["status"]=="ACTIVE"
-    recovery=api.post("/api/demo/scenario",json={"scenario":"RECOVERY"}).json()
-    assert recovery["intervention"]["status"]=="RESOLVED"
-    assert recovery["risk_history"][-1] < recovery["risk_history"][-2]
+    assert api.post("/api/control/auto",json={"enabled":True}).status_code==422
+    api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.95})
+    active=api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_b","classification":"LOW_OR_EMPTY","confidence":.95}).json()["snapshot"]
+    assert active["intervention"]["status"]=="ACTIVE"
+    cleared=api.post("/api/system/clear-live-data").json()
+    assert cleared["intervention"]["status"]=="RESOLVED"
+    assert cleared["risk_history"]==[]
 
 
 def test_zone_delete_protects_exit_references(tmp_path):
@@ -189,20 +190,18 @@ def test_create_and_control_reject_invalid_references(tmp_path):
     assert api.post("/api/control/manual",json=command).status_code==404
 
 
-def test_demo_rejects_unknown_target_zone(tmp_path):
+def test_removed_scenario_endpoint_is_unavailable(tmp_path):
     api=client(tmp_path)
-    assert api.post("/api/demo/scenario",json={"scenario":"ZONE_CONGESTION","target_id":"missing"}).status_code==422
+    assert api.post("/api/demo/scenario",json={"scenario":"ZONE_CONGESTION"}).status_code in {404,405}
 
 
-def test_timed_transition_reaches_not_improving_state(tmp_path):
-    from backend.service import CrowdGuardService
-    from backend.store import SQLiteStore
-    service=CrowdGuardService(SQLiteStore(tmp_path/"transition.db"))
-    transition_id=service.begin_transition()
-    service.run_transition("CRITICAL_STATE",delay=0,transition_id=transition_id)
-    snapshot=service.snapshot()
-    assert snapshot.prediction.risk==95
-    assert snapshot.intervention.status=="NOT_IMPROVING"
+def test_live_data_can_be_cleared(tmp_path):
+    api=client(tmp_path)
+    api.post("/api/ai/person-count",json={"camera_id":"cam_main","count":9,"confidence":.9})
+    assert api.get("/api/system").json()["camera_ai_active"] is True
+    cleared=api.post("/api/system/clear-live-data").json()
+    assert cleared["camera_ai_active"] is False
+    assert sum(zone["metrics"]["people_count"] for zone in cleared["facility"]["zones"])==0
 
 
 def test_production_spa_and_health_routes(tmp_path):
@@ -217,18 +216,14 @@ def test_production_spa_and_health_routes(tmp_path):
 
 def test_vercel_cors_preflight(tmp_path):
     api=client(tmp_path)
-    response=api.options("/api/health",headers={"Origin":"https://crowdguard-demo.vercel.app","Access-Control-Request-Method":"GET"})
+    response=api.options("/api/health",headers={"Origin":"https://crowdgard.vercel.app","Access-Control-Request-Method":"GET"})
     assert response.status_code==200
-    assert response.headers["access-control-allow-origin"]=="https://crowdguard-demo.vercel.app"
+    assert response.headers["access-control-allow-origin"]=="https://crowdgard.vercel.app"
 
 
-def test_demo_state_is_synchronized_resettable_and_acknowledged(tmp_path):
+def test_events_are_live_and_acknowledged(tmp_path):
     api=client(tmp_path)
-    state=api.post("/api/demo/scenario",json={"scenario":"CRITICAL_STATE"}).json()
-    assert state["current_scenario"]=="CRITICAL_STATE"
+    api.post("/api/ai/crowd-observation",json={"camera_id":"cam_main","classification":"NORMAL_FLOW","confidence":.9})
+    assert api.get("/api/system").json()["events"][0]["category"]=="CAMERA_AI"
     acknowledged=api.post("/api/events/acknowledge").json()["acknowledged_at"]
     assert api.get("/api/system").json()["events_acknowledged_at"]==acknowledged
-    reset=api.post("/api/demo/reset").json()
-    assert reset["current_scenario"]=="NORMAL"
-    assert reset["prediction"]["risk"]==20
-    assert reset["automatic_control"] is True

@@ -50,7 +50,7 @@ export default function LiveControl() {
         <PageIntro
           eyebrow="01 / COMMAND SURFACE"
           title="Live Control"
-          description="Waiting for the CrowdGuard backend. No simulated browser values are substituted."
+          description="Waiting for the CrowdGuard backend. Operational values remain empty until current camera observations arrive."
         />
         <div className="panel grid min-h-72 place-items-center text-center">
           <div>
@@ -454,7 +454,7 @@ export default function LiveControl() {
             <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
               {snapshot.automatic_control
                 ? "Manual mode stops automatic guidance updates until an operator enables them again."
-                : "Automatic mode allows backend decisions to update simulated guidance units."}
+                : "Automatic mode allows verified backend decisions to update connected guidance units."}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button

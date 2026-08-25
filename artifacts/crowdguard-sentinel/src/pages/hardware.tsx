@@ -1,17 +1,261 @@
-import { useState } from 'react';
-import { AlertOctagon, Cpu, RadioTower, RotateCcw, ShieldAlert } from 'lucide-react';
-import { PageIntro, Panel } from '@/components/sentinel-shell';
-import { useSentinel } from '@/hooks/use-sentinel';
-import { apiFetch } from '@/services/api';
-import type { BackendSnapshot } from '@/types/sentinel';
+import { useState } from "react";
+import {
+  AlertOctagon,
+  Cpu,
+  RadioTower,
+  RotateCcw,
+  ShieldAlert,
+} from "lucide-react";
+import { PageIntro, Panel } from "@/components/sentinel-shell";
+import { useSentinel } from "@/hooks/use-sentinel";
+import { apiFetch } from "@/services/api";
+import type { BackendSnapshot } from "@/types/sentinel";
 
-type Pending={action:'NORMAL'|'REDIRECT_TO_EXIT'|'CRITICAL'|'RESET';exit?:string;label:string};
-export default function Hardware(){const {snapshot,refresh}=useSentinel();const [confirm,setConfirm]=useState<Pending|null>(null);const [feedback,setFeedback]=useState<string|null>(null);const f=snapshot?.facility;
- async function command(pending:Pending){try{await apiFetch<BackendSnapshot>('/control/manual',{method:'POST',body:JSON.stringify({action:pending.action,recommended_exit_id:pending.exit})});setFeedback(`${pending.label} command applied and recorded`);setConfirm(null);await refresh()}catch(reason){setFeedback(reason instanceof Error?reason.message:'Command failed')}}
- return <div className="enter-rise"><PageIntro eyebrow="04 / FIELD SYSTEMS" title="Hardware" description="Monitor stationary CrowdGuard Sentinel units. Each unit represents an ESP32, servo guidance arm, WS2812B routes, colour display, DFPlayer Mini, and speaker." action={<div className="border border-primary/35 bg-primary/5 px-3 py-2 data-mono text-[9px] text-primary">{snapshot?.automatic_control?'AI CONTROL ACTIVE':'MANUAL CONTROL ACTIVE'}</div>}/>
- {!f?<div className="panel p-8 text-sm text-muted-foreground">NO DATA — backend offline.</div>:<><div className="grid gap-5 xl:grid-cols-[1.3fr_1fr]"><Panel title="Configured Sentinels" eyebrow={`${f.sentinels.length} UNIT(S)`}><div className="divide-y divide-border">{f.sentinels.map(s=><div className="p-4" key={s.id}><div className="flex items-center gap-3"><span className={`grid h-9 w-9 place-items-center border ${s.connected?'border-secondary/30 text-secondary':'border-destructive/30 text-destructive'}`}><Cpu size={16}/></span><div><div className="text-[12px] font-semibold">{s.name}</div><div className="data-mono mt-1 text-[9px] text-muted-foreground">{s.device_id} · {s.connected?'MOCK CONNECTED':'DISCONNECTED'}</div></div></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><State label="GUIDANCE ARM" value={s.hardware_state.arm_state}/><State label="DISPLAY" value={s.hardware_state.display_message}/><State label="AUDIO" value={`${s.hardware_state.audio} · ${s.hardware_state.audio_state}`}/>{Object.entries(s.hardware_state.led_routes).map(([id,value])=><State key={id} label={`${f.exits.find(e=>e.id===id)?.name??id} LED ROUTE`} value={value}/>)}</div></div>)}</div></Panel><Panel title="Hardware boundary" eyebrow="LOCAL / BACKEND CONTROLLED"><div className="p-4 text-[10px] leading-relaxed text-muted-foreground"><RadioTower size={18} className="mb-3 text-secondary"/>The dashboard never sends commands directly to ESP32. FastAPI validates the selected exit and invokes the configured hardware client. This demonstration uses MockESP32Client and requires no physical unit.</div></Panel></div>
- <Panel title="Manual control" eyebrow="CONFIRMATION REQUIRED FOR EVERY COMMAND" className="mt-5"><div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4"><Control label="Return to normal guidance" onClick={()=>setConfirm({action:'NORMAL',label:'Normal guidance'})} icon={RotateCcw}/>{f.exits.filter(e=>e.enabled&&e.status!=='CLOSED'&&e.status!=='RESTRICTED').map(e=><Control key={e.id} label={`Guide toward ${e.name}`} onClick={()=>setConfirm({action:'REDIRECT_TO_EXIT',exit:e.id,label:`Guide toward ${e.name}`})} icon={RadioTower}/>) }<Control label="Activate critical response" onClick={()=>setConfirm({action:'CRITICAL',label:'Critical response'})} icon={ShieldAlert}/><Control label="Reset hardware state" onClick={()=>setConfirm({action:'RESET',label:'Hardware reset'})} icon={RotateCcw}/></div>{feedback&&<div role="status" className="border-t border-border p-3 text-[11px] text-secondary">{feedback}</div>}</Panel></>}
- {confirm&&<div role="dialog" aria-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"><div className="panel max-w-sm p-5"><AlertOctagon className={confirm.action==='CRITICAL'?'text-destructive':'text-primary'}/><div className="mt-3 text-sm font-semibold">Confirm {confirm.label.toLowerCase()}</div><p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">This changes the simulated field-unit state, switches control to manual, and creates an audit event.</p><div className="mt-4 flex justify-end gap-2"><button onClick={()=>setConfirm(null)} className="button-secondary">Cancel</button><button onClick={()=>void command(confirm)} className={confirm.action==='CRITICAL'?'button-danger':'button-primary'}>Confirm command</button></div></div></div>}</div>}
-function State({label,value}:{label:string;value:string}){return <div className="border border-border bg-muted/20 p-3"><div className="text-[8px] text-muted-foreground">{label}</div><div className="mt-2 text-[10px] text-secondary">{humanize(value)}</div></div>}
-function Control({label,onClick,icon:Icon}:{label:string;onClick:()=>void;icon:typeof RotateCcw}){return <button onClick={onClick} className="flex min-h-24 flex-col items-start justify-between bg-card p-4 text-left hover:bg-muted/30"><Icon size={16} className="text-primary"/><span className="data-mono text-[9px] text-foreground">{label}</span></button>}
-function humanize(value:string){return value.replaceAll('_',' ').toLowerCase().replace(/^./,(letter)=>letter.toUpperCase())}
+type Pending = {
+  action: "NORMAL" | "REDIRECT_TO_EXIT" | "CRITICAL" | "RESET";
+  exit?: string;
+  label: string;
+};
+export default function Hardware() {
+  const { snapshot, refresh } = useSentinel();
+  const [confirm, setConfirm] = useState<Pending | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const f = snapshot?.facility;
+  async function command(pending: Pending) {
+    try {
+      await apiFetch<BackendSnapshot>("/control/manual", {
+        method: "POST",
+        body: JSON.stringify({
+          action: pending.action,
+          recommended_exit_id: pending.exit,
+        }),
+      });
+      setFeedback(`${pending.label} command applied and recorded`);
+      setConfirm(null);
+      await refresh();
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : "Command failed");
+    }
+  }
+  return (
+    <div className="enter-rise">
+      <PageIntro
+        eyebrow="04 / FIELD SYSTEMS"
+        title="Hardware"
+        description="Monitor stationary CrowdGuard Sentinel units. Each unit represents an ESP32, servo guidance arm, WS2812B routes, colour display, DFPlayer Mini, and speaker."
+        action={
+          <div className="border border-primary/35 bg-primary/5 px-3 py-2 data-mono text-[9px] text-primary">
+            {snapshot?.automatic_control
+              ? "AI CONTROL ACTIVE"
+              : "MANUAL CONTROL ACTIVE"}
+          </div>
+        }
+      />
+      {!f ? (
+        <div className="panel p-8 text-sm text-muted-foreground">
+          NO DATA — backend offline.
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-5 xl:grid-cols-[1.3fr_1fr]">
+            <Panel
+              title="Configured Sentinels"
+              eyebrow={`${f.sentinels.length} UNIT(S)`}
+            >
+              <div className="divide-y divide-border">
+                {f.sentinels.map((s) => (
+                  <div className="p-4" key={s.id}>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`grid h-9 w-9 place-items-center border ${s.connected ? "border-secondary/30 text-secondary" : "border-destructive/30 text-destructive"}`}
+                      >
+                        <Cpu size={16} />
+                      </span>
+                      <div>
+                        <div className="text-[12px] font-semibold">
+                          {s.name}
+                        </div>
+                        <div className="data-mono mt-1 text-[9px] text-muted-foreground">
+                          {s.device_id} ·{" "}
+                          {s.connected ? "CONNECTED" : "NOT CONFIGURED"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                      <State
+                        label="GUIDANCE ARM"
+                        value={s.hardware_state.arm_state}
+                      />
+                      <State
+                        label="DISPLAY"
+                        value={s.hardware_state.display_message}
+                      />
+                      <State
+                        label="AUDIO"
+                        value={`${s.hardware_state.audio} · ${s.hardware_state.audio_state}`}
+                      />
+                      {Object.entries(s.hardware_state.led_routes).map(
+                        ([id, value]) => (
+                          <State
+                            key={id}
+                            label={`${f.exits.find((e) => e.id === id)?.name ?? id} LED ROUTE`}
+                            value={value}
+                          />
+                        ),
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+            <Panel
+              title="Hardware boundary"
+              eyebrow="LOCAL / BACKEND CONTROLLED"
+            >
+              <div className="p-4 text-[10px] leading-relaxed text-muted-foreground">
+                <RadioTower size={18} className="mb-3 text-secondary" />
+                The dashboard never sends commands directly to ESP32. FastAPI
+                validates the selected exit and invokes the configured hardware
+                client. Commands remain unavailable until a physical Sentinel
+                connection is configured and reports as connected.
+              </div>
+            </Panel>
+          </div>
+          <Panel
+            title="Manual control"
+            eyebrow="CONFIRMATION REQUIRED FOR EVERY COMMAND"
+            className="mt-5"
+          >
+            <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+              <Control
+                label="Return to normal guidance"
+                onClick={() =>
+                  setConfirm({ action: "NORMAL", label: "Normal guidance" })
+                }
+                icon={RotateCcw}
+              />
+              {f.exits
+                .filter(
+                  (e) =>
+                    e.enabled &&
+                    e.status !== "CLOSED" &&
+                    e.status !== "RESTRICTED",
+                )
+                .map((e) => (
+                  <Control
+                    key={e.id}
+                    label={`Guide toward ${e.name}`}
+                    onClick={() =>
+                      setConfirm({
+                        action: "REDIRECT_TO_EXIT",
+                        exit: e.id,
+                        label: `Guide toward ${e.name}`,
+                      })
+                    }
+                    icon={RadioTower}
+                  />
+                ))}
+              <Control
+                label="Activate critical response"
+                onClick={() =>
+                  setConfirm({ action: "CRITICAL", label: "Critical response" })
+                }
+                icon={ShieldAlert}
+              />
+              <Control
+                label="Reset hardware state"
+                onClick={() =>
+                  setConfirm({ action: "RESET", label: "Hardware reset" })
+                }
+                icon={RotateCcw}
+              />
+            </div>
+            {feedback && (
+              <div
+                role="status"
+                className="border-t border-border p-3 text-[11px] text-secondary"
+              >
+                {feedback}
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
+      {confirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"
+        >
+          <div className="panel max-w-sm p-5">
+            <AlertOctagon
+              className={
+                confirm.action === "CRITICAL"
+                  ? "text-destructive"
+                  : "text-primary"
+              }
+            />
+            <div className="mt-3 text-sm font-semibold">
+              Confirm {confirm.label.toLowerCase()}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+              This sends a command to the connected field unit, switches
+              control to manual, and creates an audit event.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirm(null)}
+                className="button-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void command(confirm)}
+                className={
+                  confirm.action === "CRITICAL"
+                    ? "button-danger"
+                    : "button-primary"
+                }
+              >
+                Confirm command
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function State({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-border bg-muted/20 p-3">
+      <div className="text-[8px] text-muted-foreground">{label}</div>
+      <div className="mt-2 text-[10px] text-secondary">{humanize(value)}</div>
+    </div>
+  );
+}
+function Control({
+  label,
+  onClick,
+  icon: Icon,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: typeof RotateCcw;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex min-h-24 flex-col items-start justify-between bg-card p-4 text-left hover:bg-muted/30"
+    >
+      <Icon size={16} className="text-primary" />
+      <span className="data-mono text-[9px] text-foreground">{label}</span>
+    </button>
+  );
+}
+function humanize(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/^./, (letter) => letter.toUpperCase());
+}

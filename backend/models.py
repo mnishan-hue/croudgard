@@ -41,7 +41,7 @@ class Camera(BaseModel):
     name: str
     enabled: bool = True
     status: Literal["ONLINE", "OFFLINE", "DEGRADED"] = "ONLINE"
-    source: str = "demo://generated"
+    source: str = ""
     zone_ids: list[str] = Field(default_factory=list)
     camera_type: str = "GENERAL"
     ai_enabled: bool = True
@@ -107,7 +107,7 @@ class Sentinel(BaseModel):
     junction_id: str
     nearby_exit_ids: list[str] = Field(default_factory=list)
     device_id: str
-    connected: bool = True
+    connected: bool = False
     hardware_state: HardwareState = Field(default_factory=HardwareState)
 
 
@@ -131,8 +131,7 @@ class AIExplanation(BaseModel):
 
 
 class AIPrediction(BaseModel):
-    provider: str = "MOCK"
-    simulated: bool = True
+    provider: str = "CAMERA_AI"
     crowd_state: CrowdState
     affected_zone_id: str | None = None
     risk: float
@@ -174,8 +173,8 @@ class RiskSample(BaseModel):
 class LiveSnapshot(BaseModel):
     timestamp: str = Field(default_factory=utc_now)
     facility: Facility
-    ai_mode: str = "DEMO MODE"
-    ai_provider: str = "MOCK"
+    ai_mode: str = "LIVE CAMERA"
+    ai_provider: str = "CAMERA_AI"
     backend_connected: bool = True
     automatic_control: bool = True
     prediction: AIPrediction
@@ -184,16 +183,11 @@ class LiveSnapshot(BaseModel):
     events: list[EventLog]
     risk_history: list[float]
     risk_timeline: list[RiskSample] = Field(default_factory=list)
-    current_scenario: str = "EXIT_A_CONGESTION"
-    demo_environment: bool = True
+    current_scenario: str = "LIVE"
     events_acknowledged_at: str | None = None
     camera_ai_active: bool = False
-
-
-class ScenarioRequest(BaseModel):
-    scenario: str
-    target_id: str | None = None
-    timed: bool = False
+    reporting_camera_ids: list[str] = Field(default_factory=list)
+    exit_coverage_complete: bool = False
 
 
 class PersonCountObservation(BaseModel):
