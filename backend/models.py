@@ -187,6 +187,7 @@ class LiveSnapshot(BaseModel):
     current_scenario: str = "EXIT_A_CONGESTION"
     demo_environment: bool = True
     events_acknowledged_at: str | None = None
+    camera_ai_active: bool = False
 
 
 class ScenarioRequest(BaseModel):

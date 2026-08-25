@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import * as tmImage from '@teachablemachine/image';
-import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { apiFetch } from '@/services/api';
 
 type Prediction = { className: string; probability: number };
@@ -8,19 +6,25 @@ type Status = 'IDLE' | 'LOADING' | 'RUNNING' | 'ERROR';
 const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, '');
 const MODEL_PATH = `${BASE_PATH}/my_model/`;
 const PERSON_MODEL_URL = `${BASE_PATH}/person_model/model.json`;
-let modelPromise:Promise<[tmImage.CustomMobileNet,cocoSsd.ObjectDetection]>|null=null;
+type TMModule=typeof import('@teachablemachine/image');
+type WebcamInstance=InstanceType<TMModule['Webcam']>;
+
+async function createModels(){
+  const [tmImage,cocoSsd]=await Promise.all([import('@teachablemachine/image'),import('@tensorflow-models/coco-ssd')]);
+  const [model,personModel]=await Promise.all([tmImage.load(`${MODEL_PATH}model.json`,`${MODEL_PATH}metadata.json`),cocoSsd.load({base:'lite_mobilenet_v2',modelUrl:PERSON_MODEL_URL})]);
+  return {tmImage,model,personModel};
+}
+
+let modelPromise:Promise<Awaited<ReturnType<typeof createModels>>>|null=null;
 
 function loadModels(){
-  modelPromise??=Promise.all([
-    tmImage.load(`${MODEL_PATH}model.json`,`${MODEL_PATH}metadata.json`),
-    cocoSsd.load({base:'lite_mobilenet_v2',modelUrl:PERSON_MODEL_URL}),
-  ]);
+  modelPromise??=createModels();
   return modelPromise.catch((error)=>{modelPromise=null;throw error});
 }
 
 export function TeachableCamera({ cameraId }: { cameraId: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const webcamRef = useRef<tmImage.Webcam | null>(null);
+  const webcamRef = useRef<WebcamInstance | null>(null);
   const frameRef = useRef<number | null>(null);
   const runningRef = useRef(false);
   const mountedRef = useRef(true);
@@ -50,7 +54,7 @@ export function TeachableCamera({ cameraId }: { cameraId: string }) {
     try {
       if(!window.isSecureContext&&!['localhost','127.0.0.1'].includes(window.location.hostname))throw new Error('Camera access requires a secure HTTPS connection');
       if(!navigator.mediaDevices?.getUserMedia)throw new Error('This browser does not support camera access');
-      const [model, personModel] = await loadModels();
+      const {tmImage,model,personModel} = await loadModels();
       const webcam = new tmImage.Webcam(420, 320, true);
       await webcam.setup({ facingMode: 'user' });
       await webcam.play();

@@ -29,13 +29,18 @@ class CrowdGuardService:
     @property
     def facility(self): return self.store.get_facility(self.store.get_setting("active_facility"))
 
+    def camera_ai_active(self):
+        now=datetime.now(timezone.utc)
+        observations=[*self.camera_people_counts.values(),*self.camera_crowd_observations.values()]
+        return any((now-item["captured_at"].astimezone(timezone.utc)).total_seconds()<=10 for item in observations)
+
     def snapshot(self):
         facility = self.facility; prediction = self.ai.predict(facility); decision = self.decision_engine.decide(facility.zones, facility.exits)
         falling=len(self.risk_history)>1 and self.risk_history[-1] < self.risk_history[-2]
         rising_three=len(self.risk_history)>2 and self.risk_history[-1] > self.risk_history[-2] > self.risk_history[-3]
         status="RESOLVED" if prediction.risk < 40 else "EFFECTIVE" if falling else "NOT_IMPROVING" if rising_three and prediction.risk >= 70 else "ACTIVE"
         intervention = Intervention(status=status, recommended_exit_id=decision.recommended_exit_id, affected_zone_id=decision.affected_zone_id, started_risk=max(self.risk_history), current_risk=prediction.risk)
-        return LiveSnapshot(facility=facility, automatic_control=self.store.get_setting("automatic_control") == "true", prediction=prediction, decision=decision, intervention=intervention, events=self.store.events(), risk_history=self.risk_history, risk_timeline=self.risk_timeline, current_scenario=self.store.get_setting("current_scenario") or "NORMAL", events_acknowledged_at=self.store.get_setting("events_acknowledged_at"))
+        return LiveSnapshot(facility=facility, automatic_control=self.store.get_setting("automatic_control") == "true", prediction=prediction, decision=decision, intervention=intervention, events=self.store.events(), risk_history=self.risk_history, risk_timeline=self.risk_timeline, current_scenario=self.store.get_setting("current_scenario") or "NORMAL", events_acknowledged_at=self.store.get_setting("events_acknowledged_at"), camera_ai_active=self.camera_ai_active())
 
     def record_person_count(self, observation):
         facility = self.facility
