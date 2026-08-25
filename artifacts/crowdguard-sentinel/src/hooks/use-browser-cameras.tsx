@@ -143,11 +143,27 @@ async function sendDemoControl(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, camera_ids: cameraIds }),
   });
-  if (!response.ok) {
-    throw new Error(
-      "Backend rejected recorded-video control (" + response.status + ")",
-    );
+  if (response.ok) return;
+
+  // Keep video input usable during a rolling frontend/backend deployment.
+  // Older CrowdGuard backends do not have the lifecycle route yet.
+  if (response.status === 404 || response.status === 405) {
+    if (action === "RESTART") {
+      const resetResponse = await fetch(apiBase + "/system/clear-live-data", {
+        method: "POST",
+      });
+      if (!resetResponse.ok) {
+        throw new Error(
+          "Backend rejected demo analysis reset (" + resetResponse.status + ")",
+        );
+      }
+    }
+    return;
   }
+
+  throw new Error(
+    "Backend rejected recorded-video control (" + response.status + ")",
+  );
 }
 export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StationStatus>("IDLE");
@@ -189,7 +205,9 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     const demoIds = runtimesRef.current
       .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
       .map((runtime) => runtime.camera.id);
-    if (demoIds.length) void sendDemoControl("STOP", demoIds);
+    if (demoIds.length) {
+      void sendDemoControl("STOP", demoIds).catch(() => undefined);
+    }
     cleanup();
     setError("");
     setStatus("IDLE");
