@@ -1,5 +1,23 @@
 # Camera setup
 
+## Directly from the website
+
+On the deployed HTTPS website, open **Live Control** and select **Connect 3 cameras**.
+Allow camera permission, assign a different physical camera to Main, Exit A, and
+Exit B, then select **Start all three**. The browser runs the bundled COCO-SSD
+person detector, adds detection boxes, and publishes current frames and
+measurements to the same backend decision engine used by edge workers.
+
+The computer must have three accessible camera devices and the website must stay
+open. Device assignments are saved only in that browser. If a camera is unplugged
+or another application takes control of it, the station stops all three feeds so
+the dashboard cannot silently operate on a partial camera set.
+
+For unattended or permanent installations, use the edge-worker setup below. It
+uses YOLO and ByteTrack and continues running without an open browser.
+
+## Edge workers
+
 Configure a unique camera ID and assign it to one or more zones in Facility Configuration. Then start a worker with the same ID.
 
 Sources:

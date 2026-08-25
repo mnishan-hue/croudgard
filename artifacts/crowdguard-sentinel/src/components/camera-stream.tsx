@@ -35,11 +35,11 @@ export function CameraStream({
             {!compact && (
               <>
                 <div className="mt-3 data-mono text-[10px] text-muted-foreground">
-                  WAITING FOR EDGE WORKER
+                  WAITING FOR CAMERA
                 </div>
                 <p className="mx-auto mt-2 max-w-sm text-[10px] leading-relaxed text-muted-foreground/75">
-                  Start the worker assigned to {cameraName}. Footage appears
-                  automatically when annotated frames arrive.
+                  Connect cameras from Live Control or start the edge worker
+                  assigned to {cameraName}. Footage appears automatically.
                 </p>
               </>
             )}

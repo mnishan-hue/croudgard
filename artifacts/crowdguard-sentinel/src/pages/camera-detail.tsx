@@ -10,11 +10,13 @@ import { Link, useParams } from "wouter";
 import { PageIntro, Panel } from "@/components/sentinel-shell";
 import { CameraStream } from "@/components/camera-stream";
 import { useSentinel } from "@/hooks/use-sentinel";
+import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 
 export default function CameraDetail() {
   const params = useParams<{ cameraId: string }>();
   const cameraId = params?.cameraId ?? "";
   const { snapshot, refresh } = useSentinel();
+  const browserStation = useBrowserCameras();
   const camera = snapshot?.facility.cameras.find(
     (item) => item.id === safeDecode(cameraId),
   );
@@ -60,6 +62,8 @@ export default function CameraDetail() {
   const metrics = primary?.metrics;
   const reporting = snapshot.reporting_camera_ids.includes(camera.id);
   const streaming = snapshot.streaming_camera_ids?.includes(camera.id) ?? false;
+  const browserConnected =
+    browserStation.status === "RUNNING" && Boolean(browserStation.streams[camera.id]);
   const values: [string, string, string?][] = [
     ["Crowd condition", reporting?humanize(primary?.crowd_state ?? "NO DATA"):"—"],
     ["People detected", reporting?formatNumber(metrics?.people_count):"—"],
@@ -103,7 +107,7 @@ export default function CameraDetail() {
               : streaming
                 ? "Video streaming · AI waiting"
               : online
-                ? "Configured · waiting for worker"
+                ? "Configured · waiting for camera"
               : camera.enabled
                 ? humanize(camera.status)
                 : "Disabled"
@@ -127,13 +131,15 @@ export default function CameraDetail() {
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
         <Panel
           title="Live annotated footage"
-          eyebrow={streaming ? "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR EDGE WORKER" : "CAMERA UNAVAILABLE"}
+          eyebrow={streaming ? browserConnected ? "STREAMING FROM THIS BROWSER" : "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR CAMERA" : "CAMERA UNAVAILABLE"}
         >
           <CameraStream cameraId={camera.id} cameraName={camera.name} streaming={streaming} />
           <p className="border-t border-border p-3 text-[9px] leading-relaxed text-muted-foreground">
-            Detection overlays are produced by YOLO and ByteTrack. The backend
-            keeps only the newest frame in memory and does not write footage to
-            disk.
+            {browserConnected
+              ? "Detection overlays are produced by COCO-SSD in this browser. "
+              : "Edge-worker overlays are produced by YOLO and ByteTrack. "}
+            The backend keeps only the newest frame in memory and does not write
+            footage to disk.
           </p>
         </Panel>
         <Panel title="Camera information" eyebrow="SETUP AND COVERAGE">
@@ -154,7 +160,12 @@ export default function CameraDetail() {
                 "Assigned zones",
                 zones.map((zone) => zone.name).join(", ") || "Unassigned",
               ],
-              ["Video source", camera.source || "Not configured"],
+              [
+                "Video source",
+                browserConnected
+                  ? "Direct browser camera"
+                  : camera.source || "Not configured",
+              ],
             ].map(([label, value]) => (
               <div key={label} className="p-4">
                 <div className="data-mono text-[8px] text-muted-foreground">

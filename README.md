@@ -35,6 +35,11 @@ pnpm --filter @workspace/crowdguard-sentinel dev
 
 Open `http://localhost:5173`. API documentation is at `http://localhost:8000/docs`. Configuration defaults to `VITE_API_BASE_URL=/api` for a reverse proxy; for separate local servers set `VITE_API_BASE_URL=http://localhost:8000/api`. WebSocket defaults to `ws://localhost:8000/ws/live`.
 
+For an operator-controlled setup, open **Live Control → Connect 3 cameras** on
+the HTTPS website, allow camera access, assign three different devices, and start
+the browser station. CrowdGuard analyzes and publishes all three feeds while the
+tab remains open. See `docs/CAMERA_SETUP.md` for browser and unattended edge-worker options.
+
 ## Run real computer vision
 
 Install the optional local AI dependencies once:

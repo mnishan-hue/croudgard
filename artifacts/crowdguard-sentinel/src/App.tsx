@@ -4,6 +4,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SentinelProvider } from '@/hooks/use-sentinel';
+import { BrowserCameraProvider } from '@/hooks/use-browser-cameras';
 import { SentinelShell } from '@/components/sentinel-shell';
 import {
   Route,
@@ -53,9 +54,11 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <SentinelProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-            <Router />
-          </WouterRouter>
+          <BrowserCameraProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+              <Router />
+            </WouterRouter>
+          </BrowserCameraProvider>
         </SentinelProvider>
         <Toaster />
       </TooltipProvider>

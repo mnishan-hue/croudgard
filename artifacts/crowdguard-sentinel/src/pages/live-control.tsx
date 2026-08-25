@@ -25,6 +25,7 @@ import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
 import type { BackendSnapshot } from "@/types/sentinel";
 import { LiveCameraGrid } from "@/components/live-camera-grid";
+import { BrowserCameraStation } from "@/components/browser-camera-station";
 
 export default function LiveControl() {
   const { snapshot, connection, refresh } = useSentinel();
@@ -118,6 +119,7 @@ export default function LiveControl() {
           </div>
         }
       />
+      <BrowserCameraStation cameras={facility.cameras} />
       {hasLiveAI ? (
         <section
           className={`mb-5 border p-4 ${critical ? "border-destructive/60 bg-destructive/10" : "border-primary/35 bg-primary/[.05]"}`}
@@ -166,9 +168,9 @@ export default function LiveControl() {
                 No live camera measurements yet
               </h2>
               <p className="mt-2 text-[12px] text-muted-foreground">
-                Start the configured camera workers. Until current observations
-                arrive, CrowdGuard intentionally hides risk, people count, and
-                exit recommendations.
+                Connect three cameras above or start the configured edge
+                workers. Until current observations arrive, CrowdGuard
+                intentionally hides risk, people count, and exit recommendations.
               </p>
             </div>
           </div>
