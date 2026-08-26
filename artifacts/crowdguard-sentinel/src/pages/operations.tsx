@@ -13,22 +13,31 @@ import {
 import { LiveCameraGrid } from "@/components/live-camera-grid";
 import { MapPanel, PageIntro, Panel } from "@/components/sentinel-shell";
 import { SourceControl } from "@/components/source-control";
+import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
 import type { BackendSnapshot, Exit } from "@/types/sentinel";
 
 export default function Operations() {
   const { snapshot, refresh, error } = useSentinel();
+  const cameraStation = useBrowserCameras();
   const [changingAuto, setChangingAuto] = useState(false);
 
-  const totalPeople = useMemo(
-    () =>
+  const totalPeople = useMemo(() => {
+    const localMetrics = Object.values(cameraStation.metrics);
+    if (cameraStation.status === "RUNNING" && localMetrics.length) {
+      return localMetrics.reduce(
+        (total, metric) => total + metric.peopleCount,
+        0,
+      );
+    }
+    return (
       snapshot?.facility.zones.reduce(
         (total, zone) => total + zone.metrics.people_count,
         0,
-      ) ?? 0,
-    [snapshot],
-  );
+      ) ?? 0
+    );
+  }, [cameraStation.metrics, cameraStation.status, snapshot]);
 
   if (!snapshot) {
     return (
@@ -59,7 +68,12 @@ export default function Operations() {
     (sentinel) => sentinel.connected,
   ).length;
   const risk = Math.round(prediction.risk);
-  const monitoring = snapshot.camera_ai_active;
+  const localMonitoring = cameraStation.status === "RUNNING";
+  const monitoring = snapshot.camera_ai_active || localMonitoring;
+  const activeCameraCount = Math.max(
+    snapshot.reporting_camera_ids.length,
+    Object.keys(cameraStation.metrics).length,
+  );
 
   async function toggleAutomatic() {
     if (!snapshot) return;
@@ -118,9 +132,9 @@ export default function Operations() {
         <Metric
           icon={Camera}
           label="Camera AI"
-          value={`${snapshot.reporting_camera_ids.length}/${facility.cameras.filter((camera) => camera.enabled).length}`}
+          value={`${activeCameraCount}/${facility.cameras.filter((camera) => camera.enabled).length}`}
           detail="Sources reporting"
-          tone={snapshot.reporting_camera_ids.length ? "teal" : "amber"}
+          tone={activeCameraCount ? "teal" : "amber"}
         />
         <Metric
           icon={Cpu}

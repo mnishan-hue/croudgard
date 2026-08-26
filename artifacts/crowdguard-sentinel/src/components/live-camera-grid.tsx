@@ -1,4 +1,5 @@
-import { ExternalLink, Users } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { ExternalLink, Radio, Users } from "lucide-react";
 import { Link } from "wouter";
 import { CameraStream } from "@/components/camera-stream";
 import { useBrowserCameras } from "@/hooks/use-browser-cameras";
@@ -36,6 +37,7 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
         const browserSource = Boolean(station.videos[camera.id]);
         const recorded = browserSource && station.sourceMode === "DEMO_VIDEOS";
         const browserMetric = station.metrics[camera.id];
+        const analyzed = live || Boolean(browserMetric);
 
         return (
           <Link
@@ -44,12 +46,20 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
             className="group overflow-hidden border border-border bg-card transition-colors hover:border-primary/50"
           >
             <div className="relative">
-              <CameraStream
-                cameraId={camera.id}
-                cameraName={camera.name}
-                streaming={videoLive}
-                compact
-              />
+              {browserSource ? (
+                <NativeCameraStream
+                  cameraName={camera.name}
+                  source={station.videos[camera.id]}
+                  stream={station.streams[camera.id]}
+                />
+              ) : (
+                <CameraStream
+                  cameraId={camera.id}
+                  cameraName={camera.name}
+                  streaming={videoLive}
+                  compact
+                />
+              )}
               <ExternalLink
                 size={13}
                 className="absolute right-3 top-3 z-10 text-muted-foreground group-hover:text-primary"
@@ -76,9 +86,9 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                 </div>
                 <div className="flex items-center gap-1 data-mono text-[10px] text-secondary">
                   <Users size={12} />
-                  {live
-                    ? (primary?.metrics.people_count ??
-                      browserMetric?.peopleCount ??
+                  {analyzed
+                    ? (browserMetric?.peopleCount ??
+                      primary?.metrics.people_count ??
                       0)
                     : "—"}
                 </div>
@@ -103,9 +113,11 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                 <Datum
                   label="FPS"
                   value={
-                    live && primary?.metrics.fps
-                      ? primary.metrics.fps.toFixed(1)
-                      : "—"
+                    browserMetric?.fps
+                      ? browserMetric.fps.toFixed(1)
+                      : live && primary?.metrics.fps
+                        ? primary.metrics.fps.toFixed(1)
+                        : "—"
                   }
                 />
               </div>
@@ -122,6 +134,68 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
   );
 }
 
+function NativeCameraStream({
+  cameraName,
+  source,
+  stream,
+}: {
+  cameraName: string;
+  source: HTMLVideoElement;
+  stream?: MediaStream;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    video.muted = true;
+    video.playsInline = true;
+
+    if (stream) {
+      video.srcObject = stream;
+      void video.play().catch(() => undefined);
+      return () => {
+        video.pause();
+        video.srcObject = null;
+      };
+    }
+
+    video.srcObject = null;
+    video.src = source.currentSrc || source.src;
+    const synchronize = () => {
+      if (Math.abs(video.currentTime - source.currentTime) > 0.25) {
+        video.currentTime = source.currentTime;
+      }
+      video.playbackRate = source.playbackRate;
+      if (source.paused) video.pause();
+      else void video.play().catch(() => undefined);
+    };
+    synchronize();
+    const timer = window.setInterval(synchronize, 300);
+    return () => {
+      window.clearInterval(timer);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [source, stream]);
+
+  return (
+    <div className="relative aspect-video overflow-hidden bg-[#071019]">
+      <video
+        ref={ref}
+        autoPlay
+        muted
+        playsInline
+        className="h-full w-full object-contain"
+        aria-label={`Native live footage from ${cameraName}`}
+      />
+      <div className="absolute left-2 top-2 flex items-center gap-1.5 rounded-sm border border-secondary/40 bg-[#071019]/80 px-2 py-1 data-mono text-[7px] text-secondary backdrop-blur">
+        <Radio size={9} /> NATIVE LIVE VIDEO
+      </div>
+    </div>
+  );
+}
 function Datum({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-card p-2">

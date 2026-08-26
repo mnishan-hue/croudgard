@@ -296,8 +296,8 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
 
             <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/50 p-4">
               <p className="text-[10px] text-muted-foreground">
-                AI uses 416px analysis frames; the displayed video keeps its
-                native playback rate.
+                AI uses GPU-optimized 300px analysis frames; the displayed video
+                keeps its native playback rate.
               </p>
               {!running && (
                 <button

@@ -47,6 +47,7 @@ type RuntimeCamera = {
   lastAnalyzedAt: number;
   lastRisk: number;
   lastFramePublishedAt: number;
+  networkInFlight: boolean;
 };
 
 export type BrowserCameraMetric = {
@@ -84,17 +85,30 @@ const BrowserCameraContext = createContext<BrowserCameraContextValue | null>(
   null,
 );
 const STORAGE_KEY = "crowdguard.browser-camera-assignments.v1";
-const ANALYSIS_WIDTH = 416;
-const ANALYSIS_TICKS_PER_SECOND = 6;
+const ANALYSIS_WIDTH = 300;
+const ANALYSIS_TICKS_PER_SECOND = 12;
 const FRAME_PUBLISH_INTERVAL_MS = 1_000;
 const MODEL_PATH = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/person_model/model.json`;
 
 let modelPromise: Promise<PersonModel> | null = null;
 
+async function createPersonModel() {
+  const [tf, cocoSsd] = await Promise.all([
+    import("@tensorflow/tfjs"),
+    import("@tensorflow-models/coco-ssd"),
+  ]);
+  if (tf.getBackend() !== "webgl") {
+    await tf.setBackend("webgl").catch(() => false);
+  }
+  await tf.ready();
+  return cocoSsd.load({
+    base: "lite_mobilenet_v2",
+    modelUrl: MODEL_PATH,
+  }) as Promise<PersonModel>;
+}
+
 function loadPersonModel() {
-  modelPromise ??= import("@tensorflow-models/coco-ssd").then((module) =>
-    module.load({ base: "lite_mobilenet_v2", modelUrl: MODEL_PATH }),
-  ) as Promise<PersonModel>;
+  modelPromise ??= createPersonModel();
   return modelPromise.catch((reason) => {
     modelPromise = null;
     throw reason;
@@ -185,6 +199,13 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const runningRef = useRef(false);
   const runtimesRef = useRef<RuntimeCamera[]>([]);
   const generationRef = useRef(0);
+
+  useEffect(() => {
+    const preloadTimer = window.setTimeout(() => {
+      void loadPersonModel().catch(() => undefined);
+    }, 250);
+    return () => window.clearTimeout(preloadTimer);
+  }, []);
 
   const cleanup = useCallback(() => {
     runningRef.current = false;
@@ -349,11 +370,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         const [, , boxWidth, boxHeight] = person.bbox;
         return sum + boxWidth * boxHeight;
       }, 0);
-      const occupiedAreaRatio = clamp(
-        occupiedArea / (width * height),
-        0,
-        1,
-      );
+      const occupiedAreaRatio = clamp(occupiedArea / (width * height), 0, 1);
       const capacity = runtime.camera.id.includes("exit") ? 18 : 30;
       const densityScore = clamp(
         Math.max((people.length / capacity) * 100, occupiedAreaRatio * 100),
@@ -377,47 +394,6 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       const confidence = people.length
         ? people.reduce((sum, person) => sum + person.score, 0) / people.length
         : 0.75;
-      const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
-      const shouldPublishFrame =
-        now - runtime.lastFramePublishedAt >= FRAME_PUBLISH_INTERVAL_MS;
-      const frameRequest = shouldPublishFrame
-        ? canvasBlob(runtime.canvas).then((frame) =>
-            fetch(
-              `${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "image/jpeg" },
-                body: frame,
-              },
-            ),
-          )
-        : Promise.resolve(null);
-      const [frameResponse, observationResponse] = await Promise.all([
-        frameRequest,
-        fetch(`${apiBase}/ai/cv-observation`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            camera_id: runtime.camera.id,
-            people_count: people.length,
-            tracked_people: people.length,
-            detection_confidence: confidence,
-            fps,
-            density_score: densityScore,
-            occupied_area_ratio: occupiedAreaRatio,
-            congestion_score: congestionScore,
-            risk_score: riskScore,
-            trend,
-            disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
-          }),
-        }),
-      ]);
-      if (frameResponse?.ok) runtime.lastFramePublishedAt = now;
-      if ((frameResponse && !frameResponse.ok) || !observationResponse.ok) {
-        throw new Error(
-          `Backend rejected camera data (${frameResponse?.status ?? "skipped"}/${observationResponse.status})`,
-        );
-      }
       setMetrics((current) => ({
         ...current,
         [runtime.camera.id]: {
@@ -426,6 +402,64 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
           fps,
         },
       }));
+
+      // Network speed must never control inference speed. Publish only the
+      // newest available result while the next camera frame is analyzed.
+      if (!runtime.networkInFlight) {
+        runtime.networkInFlight = true;
+        const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
+        const shouldPublishFrame =
+          now - runtime.lastFramePublishedAt >= FRAME_PUBLISH_INTERVAL_MS;
+        void (async () => {
+          try {
+            const frameRequest = shouldPublishFrame
+              ? canvasBlob(runtime.canvas).then((frame) =>
+                  fetch(
+                    `${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "image/jpeg" },
+                      body: frame,
+                    },
+                  ),
+                )
+              : Promise.resolve(null);
+            const [frameResponse, observationResponse] = await Promise.all([
+              frameRequest,
+              fetch(`${apiBase}/ai/cv-observation`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  camera_id: runtime.camera.id,
+                  people_count: people.length,
+                  tracked_people: people.length,
+                  detection_confidence: confidence,
+                  fps,
+                  density_score: densityScore,
+                  occupied_area_ratio: occupiedAreaRatio,
+                  congestion_score: congestionScore,
+                  risk_score: riskScore,
+                  trend,
+                  disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
+                }),
+              }),
+            ]);
+            if (frameResponse?.ok) runtime.lastFramePublishedAt = now;
+            if (
+              (frameResponse && !frameResponse.ok) ||
+              !observationResponse.ok
+            ) {
+              console.warn(
+                `Backend rejected camera data (${frameResponse?.status ?? "skipped"}/${observationResponse.status})`,
+              );
+            }
+          } catch (reason) {
+            console.warn("Camera result publishing is delayed", reason);
+          } finally {
+            runtime.networkInFlight = false;
+          }
+        })();
+      }
     },
     [],
   );
@@ -518,6 +552,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             lastAnalyzedAt: 0,
             lastRisk: 0,
             lastFramePublishedAt: 0,
+            networkInFlight: false,
           });
           runtimesRef.current = runtimes;
         }
