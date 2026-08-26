@@ -103,7 +103,7 @@ class Junction(BaseModel):
 
 class HardwareState(BaseModel):
     arm_state: str = "NORMAL"
-    display_message: str = "NORMAL"
+    display_message: str = "THANK YOU VISIT AGAIN"
     audio: str = "NONE"
     audio_state: str = "IDLE"
     led_routes: dict[str, str] = Field(default_factory=dict)

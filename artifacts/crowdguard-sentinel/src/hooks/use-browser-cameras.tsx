@@ -10,31 +10,36 @@ import {
 } from "react";
 import { serviceConfig } from "@/services/config";
 import type { Camera } from "@/types/sentinel";
+import {
+  applyPersonNMS,
+  calculateSyncCorrection,
+  clamp,
+  computeCameraRiskScores,
+  computeOccupiedAreaRatio,
+  type CameraAnalysisMetrics,
+  type FilteredPersonDetection,
+  type RawDetection,
+} from "@/lib/cv-detection";
 
-type StationStatus =
+export type StationStatus =
   | "IDLE"
   | "REQUESTING_PERMISSION"
   | "READY"
   | "LOADING_AI"
+  | "BUFFERING"
   | "CONNECTING"
   | "RUNNING"
   | "ERROR";
 
-type Detection = {
-  bbox: [number, number, number, number];
-  class: string;
-  score: number;
-};
+export type CameraSourceMode = "LIVE_CAMERAS" | "DEMO_VIDEOS";
 
 type PersonModel = {
   detect(
     input: HTMLVideoElement | HTMLCanvasElement,
     maxNumBoxes?: number,
-    minScore?: number,
-  ): Promise<Detection[]>;
+  ): Promise<RawDetection[]>;
+  dispose?(): void;
 };
-
-export type CameraSourceMode = "LIVE_CAMERAS" | "DEMO_VIDEOS";
 
 type RuntimeCamera = {
   camera: Camera;
@@ -48,15 +53,15 @@ type RuntimeCamera = {
   lastRisk: number;
   lastFramePublishedAt: number;
   networkInFlight: boolean;
+  inferenceDurationMs: number;
+  publishLatencyMs: number;
+  syncDriftMs: number;
+  skippedFrames: number;
+  boxes: FilteredPersonDetection[];
+  hasAnalyzed: boolean;
 };
 
-export type BrowserCameraMetric = {
-  peopleCount: number;
-  confidence: number;
-  fps: number;
-};
-
-type BrowserCameraContextValue = {
+export type BrowserCameraContextValue = {
   status: StationStatus;
   sourceMode: CameraSourceMode;
   devices: MediaDeviceInfo[];
@@ -65,7 +70,9 @@ type BrowserCameraContextValue = {
   streams: Record<string, MediaStream>;
   videos: Record<string, HTMLVideoElement>;
   playing: Record<string, boolean>;
-  metrics: Record<string, BrowserCameraMetric>;
+  metrics: Record<string, CameraAnalysisMetrics>;
+  confidenceThreshold: number;
+  setConfidenceThreshold(threshold: number): void;
   error: string;
   prepare(cameras: Camera[]): Promise<void>;
   setSourceMode(mode: CameraSourceMode): void;
@@ -84,30 +91,40 @@ type BrowserCameraContextValue = {
 const BrowserCameraContext = createContext<BrowserCameraContextValue | null>(
   null,
 );
+
 const STORAGE_KEY = "crowdguard.browser-camera-assignments.v1";
 const ANALYSIS_WIDTH = 300;
 const ANALYSIS_TICKS_PER_SECOND = 12;
 const FRAME_PUBLISH_INTERVAL_MS = 1_000;
 const MODEL_PATH = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/person_model/model.json`;
+const SYNC_TOLERANCE_SECONDS = 0.2; // 200 ms sync tolerance window
 
 let modelPromise: Promise<PersonModel> | null = null;
 
-async function createPersonModel() {
+async function createPersonModel(): Promise<PersonModel> {
   const [tf, cocoSsd] = await Promise.all([
     import("@tensorflow/tfjs"),
     import("@tensorflow-models/coco-ssd"),
   ]);
+
   if (tf.getBackend() !== "webgl") {
-    await tf.setBackend("webgl").catch(() => false);
+    try {
+      await tf.setBackend("webgl");
+    } catch {
+      await tf.setBackend("cpu");
+    }
   }
   await tf.ready();
-  return cocoSsd.load({
+
+  const model = await cocoSsd.load({
     base: "lite_mobilenet_v2",
     modelUrl: MODEL_PATH,
-  }) as Promise<PersonModel>;
+  });
+
+  return model as unknown as PersonModel;
 }
 
-function loadPersonModel() {
+function loadPersonModel(): Promise<PersonModel> {
   modelPromise ??= createPersonModel();
   return modelPromise.catch((reason) => {
     modelPromise = null;
@@ -116,14 +133,12 @@ function loadPersonModel() {
 }
 
 function wait(milliseconds: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  return new Promise<void>((resolve) =>
+    window.setTimeout(resolve, milliseconds),
+  );
 }
 
-function clamp(value: number, minimum = 0, maximum = 100) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function canvasBlob(canvas: HTMLCanvasElement) {
+function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (blob) =>
@@ -136,7 +151,7 @@ function canvasBlob(canvas: HTMLCanvasElement) {
   });
 }
 
-function readableCameraError(reason: unknown) {
+function readableCameraError(reason: unknown): string {
   if (reason instanceof DOMException) {
     if (reason.name === "NotAllowedError")
       return "Camera permission was denied. Allow camera access in the browser address bar and try again.";
@@ -150,38 +165,58 @@ function readableCameraError(reason: unknown) {
     : "The browser camera station stopped unexpectedly.";
 }
 
+function createWarmingMetric(runtime: RuntimeCamera): CameraAnalysisMetrics {
+  return {
+    cameraId: runtime.camera.id,
+    timestamp: new Date().toISOString(),
+    peopleCount: 0,
+    confidence: 0,
+    fps: 0,
+    occupiedAreaRatio: 0,
+    densityScore: 0,
+    congestionScore: 0,
+    riskScore: 0,
+    trend: "UNAVAILABLE",
+    boxes: [],
+    inferenceDurationMs: 0,
+    publishLatencyMs: 0,
+    syncDriftMs: 0,
+    skippedFrames: 0,
+    isWarmingUp: true,
+  };
+}
 async function sendDemoControl(
   action: "START" | "PAUSE" | "RESTART" | "STOP",
   cameraIds: string[],
 ) {
   const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
-  const response = await fetch(apiBase + "/demo/video-control", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, camera_ids: cameraIds }),
-  });
-  if (response.ok) return;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 2_000);
+  try {
+    const response = await fetch(apiBase + "/demo/video-control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, camera_ids: cameraIds }),
+      signal: controller.signal,
+    });
+    if (response.ok) return;
 
-  // Keep video input usable during a rolling frontend/backend deployment.
-  // Older CrowdGuard backends do not have the lifecycle route yet.
-  if (response.status === 404 || response.status === 405) {
-    if (action === "RESTART") {
-      const resetResponse = await fetch(apiBase + "/system/clear-live-data", {
-        method: "POST",
-      });
-      if (!resetResponse.ok) {
-        throw new Error(
-          "Backend rejected demo analysis reset (" + resetResponse.status + ")",
-        );
+    if (response.status === 404 || response.status === 405) {
+      if (action === "RESTART") {
+        await fetch(apiBase + "/system/clear-live-data", {
+          method: "POST",
+        }).catch(() => undefined);
       }
+      return;
     }
-    return;
+  } catch (err) {
+    // Offline backend should not crash frontend demonstration.
+    console.warn("Backend camera-control notification deferred", err);
+  } finally {
+    window.clearTimeout(timeout);
   }
-
-  throw new Error(
-    "Backend rejected recorded-video control (" + response.status + ")",
-  );
 }
+
 export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StationStatus>("IDLE");
   const [sourceMode, setSourceModeState] =
@@ -192,18 +227,23 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
   const [videos, setVideos] = useState<Record<string, HTMLVideoElement>>({});
   const [playing, setPlaying] = useState<Record<string, boolean>>({});
-  const [metrics, setMetrics] = useState<Record<string, BrowserCameraMetric>>(
+  const [metrics, setMetrics] = useState<Record<string, CameraAnalysisMetrics>>(
     {},
   );
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.48);
   const [error, setError] = useState("");
+
   const runningRef = useRef(false);
   const runtimesRef = useRef<RuntimeCamera[]>([]);
   const generationRef = useRef(0);
+  const confidenceRef = useRef(confidenceThreshold);
+  confidenceRef.current = confidenceThreshold;
 
+  // Preload model on startup
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => {
       void loadPersonModel().catch(() => undefined);
-    }, 250);
+    }, 200);
     return () => window.clearTimeout(preloadTimer);
   }, []);
 
@@ -226,11 +266,9 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stop = useCallback(() => {
-    const demoIds = runtimesRef.current
-      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
-      .map((runtime) => runtime.camera.id);
-    if (demoIds.length) {
-      void sendDemoControl("STOP", demoIds).catch(() => undefined);
+    const cameraIds = runtimesRef.current.map((runtime) => runtime.camera.id);
+    if (cameraIds.length) {
+      void sendDemoControl("STOP", cameraIds).catch(() => undefined);
     }
     cleanup();
     setError("");
@@ -267,7 +305,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         await navigator.mediaDevices.enumerateDevices()
       ).filter((device) => device.kind === "videoinput");
       if (!available.length)
-        throw new Error("No cameras were found on this computer.");
+        throw new Error("No physical cameras were found on this computer.");
       const validIds = new Set(available.map((device) => device.deviceId));
       let saved: Record<string, string> = {};
       try {
@@ -323,94 +361,98 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const publish = useCallback(
+  const analyzeRuntime = useCallback(
     async (runtime: RuntimeCamera, model: PersonModel) => {
+      const inferenceStart = performance.now();
       const sourceWidth = runtime.video.videoWidth || 640;
       const sourceHeight = runtime.video.videoHeight || 360;
-      const width = Math.min(ANALYSIS_WIDTH, sourceWidth);
-      const height = Math.max(
+      const targetWidth = Math.min(ANALYSIS_WIDTH, sourceWidth);
+      const targetHeight = Math.max(
         1,
-        Math.round((sourceHeight / sourceWidth) * width),
+        Math.round((sourceHeight / sourceWidth) * targetWidth),
       );
-      runtime.canvas.width = width;
-      runtime.canvas.height = height;
+
+      if (
+        runtime.canvas.width !== targetWidth ||
+        runtime.canvas.height !== targetHeight
+      ) {
+        runtime.canvas.width = targetWidth;
+        runtime.canvas.height = targetHeight;
+      }
+
       const context = runtime.canvas.getContext("2d", { alpha: false });
       if (!context) throw new Error("Camera drawing surface is unavailable");
-      context.drawImage(runtime.video, 0, 0, width, height);
-      const detections = await model.detect(runtime.canvas, 30, 0.48);
-      const people = detections.filter(
-        (detection) => detection.class === "person" && detection.score >= 0.55,
-      );
-      const scaleX = 1;
-      const scaleY = 1;
-      context.lineWidth = 2;
-      context.font = "12px monospace";
-      context.strokeStyle = "#2dd4bf";
-      context.fillStyle = "#071019cc";
-      for (const person of people) {
-        const [x, y, boxWidth, boxHeight] = person.bbox;
-        const left = x * scaleX;
-        const top = y * scaleY;
-        const scaledWidth = boxWidth * scaleX;
-        const scaledHeight = boxHeight * scaleY;
-        context.strokeRect(left, top, scaledWidth, scaledHeight);
-        const label = `PERSON ${Math.round(person.score * 100)}%`;
-        const labelWidth = context.measureText(label).width + 8;
-        context.fillRect(left, Math.max(0, top - 18), labelWidth, 18);
-        context.fillStyle = "#2dd4bf";
-        context.fillText(label, left + 4, Math.max(12, top - 5));
-        context.fillStyle = "#071019cc";
-      }
-      context.fillStyle = "#071019cc";
-      context.fillRect(8, 8, 154, 25);
-      context.fillStyle = "#2dd4bf";
-      context.fillText(`LIVE AI · ${people.length} PEOPLE`, 15, 25);
+      context.drawImage(runtime.video, 0, 0, targetWidth, targetHeight);
 
-      const occupiedArea = people.reduce((sum, person) => {
-        const [, , boxWidth, boxHeight] = person.bbox;
-        return sum + boxWidth * boxHeight;
-      }, 0);
-      const occupiedAreaRatio = clamp(occupiedArea / (width * height), 0, 1);
-      const capacity = runtime.camera.id.includes("exit") ? 18 : 30;
-      const densityScore = clamp(
-        Math.max((people.length / capacity) * 100, occupiedAreaRatio * 100),
+      const rawDetections = await model.detect(runtime.canvas, 50);
+      const people = applyPersonNMS(rawDetections, confidenceRef.current, 0.4);
+      runtime.boxes = people;
+      runtime.hasAnalyzed = true;
+
+      const occupiedAreaRatio = computeOccupiedAreaRatio(
+        people,
+        targetWidth,
+        targetHeight,
       );
-      const congestionScore = clamp(densityScore * 0.85 + people.length * 1.5);
-      const riskScore = clamp(densityScore * 0.7 + congestionScore * 0.3);
+
+      const { densityScore, congestionScore, riskScore, trend } =
+        computeCameraRiskScores(
+          runtime.camera.id,
+          people.length,
+          occupiedAreaRatio,
+          runtime.lastRisk,
+        );
+
       const now = performance.now();
-      const fps = clamp(
-        runtime.lastAnalyzedAt ? 1000 / (now - runtime.lastAnalyzedAt) : 0,
-        0,
-        240,
-      );
-      const trend =
-        Math.abs(riskScore - runtime.lastRisk) < 3
-          ? "STABLE"
-          : riskScore > runtime.lastRisk
-            ? "RISING"
-            : "FALLING";
+      const inferenceDuration = Math.round(now - inferenceStart);
+      runtime.inferenceDurationMs = inferenceDuration;
+
+      const fps = runtime.lastAnalyzedAt
+        ? clamp(1000 / (now - runtime.lastAnalyzedAt), 0, 240)
+        : 0;
+
       runtime.lastAnalyzedAt = now;
       runtime.lastRisk = riskScore;
-      const confidence = people.length
+
+      const avgConfidence = people.length
         ? people.reduce((sum, person) => sum + person.score, 0) / people.length
         : 0.75;
+
+      const timestamp = new Date().toISOString();
+
+      const metric: CameraAnalysisMetrics = {
+        cameraId: runtime.camera.id,
+        timestamp,
+        peopleCount: people.length,
+        confidence: Math.round(avgConfidence * 100) / 100,
+        fps: Math.round(fps * 10) / 10,
+        occupiedAreaRatio: Math.round(occupiedAreaRatio * 1000) / 1000,
+        densityScore,
+        congestionScore,
+        riskScore,
+        trend,
+        boxes: people,
+        inferenceDurationMs: inferenceDuration,
+        publishLatencyMs: runtime.publishLatencyMs,
+        syncDriftMs: runtime.syncDriftMs,
+        skippedFrames: runtime.skippedFrames,
+        isWarmingUp: false,
+      };
+
       setMetrics((current) => ({
         ...current,
-        [runtime.camera.id]: {
-          peopleCount: people.length,
-          confidence,
-          fps,
-        },
+        [runtime.camera.id]: metric,
       }));
 
-      // Network speed must never control inference speed. Publish only the
-      // newest available result while the next camera frame is analyzed.
+      // Asynchronously publish to backend without blocking local analysis
       if (!runtime.networkInFlight) {
         runtime.networkInFlight = true;
         const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
         const shouldPublishFrame =
           now - runtime.lastFramePublishedAt >= FRAME_PUBLISH_INTERVAL_MS;
+
         void (async () => {
+          const publishStart = performance.now();
           try {
             const frameRequest = shouldPublishFrame
               ? canvasBlob(runtime.canvas).then((frame) =>
@@ -424,37 +466,46 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
                   ),
                 )
               : Promise.resolve(null);
-            const [frameResponse, observationResponse] = await Promise.all([
-              frameRequest,
-              fetch(`${apiBase}/ai/cv-observation`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  camera_id: runtime.camera.id,
-                  people_count: people.length,
-                  tracked_people: people.length,
-                  detection_confidence: confidence,
-                  fps,
-                  density_score: densityScore,
-                  occupied_area_ratio: occupiedAreaRatio,
-                  congestion_score: congestionScore,
-                  risk_score: riskScore,
-                  trend,
-                  disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
-                }),
+
+            const observationRequest = fetch(`${apiBase}/ai/cv-observation`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                camera_id: runtime.camera.id,
+                captured_at: timestamp,
+                people_count: people.length,
+                tracked_people: people.length,
+                detection_confidence: avgConfidence,
+                fps: Math.max(0.1, fps),
+                density_score: densityScore,
+                occupied_area_ratio: occupiedAreaRatio,
+                congestion_score: congestionScore,
+                risk_score: riskScore,
+                trend,
+                disturbance: riskScore >= 75 ? "LOCAL" : "NONE",
               }),
+            });
+
+            const [frameResponse, obsResponse] = await Promise.all([
+              frameRequest,
+              observationRequest,
             ]);
+
             if (frameResponse?.ok) runtime.lastFramePublishedAt = now;
+            runtime.publishLatencyMs = Math.round(
+              performance.now() - publishStart,
+            );
+
             if (
               (frameResponse && !frameResponse.ok) ||
-              !observationResponse.ok
+              (!obsResponse.ok && obsResponse.status !== 404)
             ) {
               console.warn(
-                `Backend rejected camera data (${frameResponse?.status ?? "skipped"}/${observationResponse.status})`,
+                `Backend rejected camera observation (${obsResponse.status})`,
               );
             }
           } catch (reason) {
-            console.warn("Camera result publishing is delayed", reason);
+            // Background publish delayed or backend offline
           } finally {
             runtime.networkInFlight = false;
           }
@@ -475,6 +526,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       const selectedDevices = selectedCameras.map(
         (camera) => assignments[camera.id],
       );
+
       if (!selectedCameras.length) {
         setStatus("ERROR");
         setError(
@@ -484,13 +536,14 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         );
         return;
       }
+
       if (
         sourceMode === "LIVE_CAMERAS" &&
         new Set(selectedDevices).size !== selectedDevices.length
       ) {
         setStatus("ERROR");
         setError(
-          "Each CrowdGuard camera must use a different physical camera.",
+          "Each CrowdGuard camera location must use a different physical camera.",
         );
         return;
       }
@@ -498,32 +551,25 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       cleanup();
       setError("");
       setStatus("LOADING_AI");
+
       try {
         const model = await loadPersonModel();
-        setStatus("CONNECTING");
+        setStatus("BUFFERING");
+
         const runtimes: RuntimeCamera[] = [];
+
+        // 1. Instantiate and configure video elements
         for (const camera of selectedCameras) {
           const video = document.createElement("video");
           video.muted = true;
           video.playsInline = true;
           video.preload = "auto";
+          video.autoplay = false;
+
           let deviceId: string | undefined;
           let stream: MediaStream | undefined;
           let objectUrl: string | undefined;
-          const loaded = new Promise<void>((resolve, reject) => {
-            const timeout = window.setTimeout(
-              () => reject(new Error(camera.name + " did not start in time.")),
-              10_000,
-            );
-            video.onloadedmetadata = () => {
-              window.clearTimeout(timeout);
-              resolve();
-            };
-            video.onerror = () => {
-              window.clearTimeout(timeout);
-              reject(new Error(camera.name + " could not produce video."));
-            };
-          });
+
           if (sourceMode === "DEMO_VIDEOS") {
             objectUrl = URL.createObjectURL(videoFiles[camera.id]);
             video.src = objectUrl;
@@ -540,7 +586,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             });
             video.srcObject = stream;
           }
-          await loaded;
+
           runtimes.push({
             camera,
             sourceMode,
@@ -553,49 +599,126 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             lastRisk: 0,
             lastFramePublishedAt: 0,
             networkInFlight: false,
+            inferenceDurationMs: 0,
+            publishLatencyMs: 0,
+            syncDriftMs: 0,
+            skippedFrames: 0,
+            boxes: [],
+            hasAnalyzed: false,
           });
-          runtimesRef.current = runtimes;
+        }
+
+        runtimesRef.current = runtimes;
+
+        // 2. Buffer all selected videos simultaneously until ready
+        const bufferPromises = runtimes.map((runtime) => {
+          return new Promise<void>((resolve, reject) => {
+            const video = runtime.video;
+
+            const onReady = () => {
+              cleanupListeners();
+              resolve();
+            };
+
+            const onError = () => {
+              cleanupListeners();
+              reject(
+                new Error(
+                  `${runtime.camera.name}: Video failed to load or decode.`,
+                ),
+              );
+            };
+
+            const timeout = window.setTimeout(() => {
+              cleanupListeners();
+              reject(
+                new Error(
+                  `${runtime.camera.name}: Video buffering timed out. Ensure the format is supported.`,
+                ),
+              );
+            }, 12_000);
+
+            function cleanupListeners() {
+              window.clearTimeout(timeout);
+              video.removeEventListener("canplay", onReady);
+              video.removeEventListener("canplaythrough", onReady);
+              video.removeEventListener("loadeddata", onReady);
+              video.removeEventListener("error", onError);
+            }
+
+            if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+              window.clearTimeout(timeout);
+              resolve();
+              return;
+            }
+
+            video.addEventListener("canplay", onReady);
+            video.addEventListener("canplaythrough", onReady);
+            video.addEventListener("loadeddata", onReady);
+            video.addEventListener("error", onError);
+          });
+        });
+
+        await Promise.all(bufferPromises);
+
+        setStatus("CONNECTING");
+
+        // 3. Set time to 0 and start all videos simultaneously with Promise.all
+        for (const runtime of runtimes) {
+          if (runtime.sourceMode === "DEMO_VIDEOS") {
+            runtime.video.currentTime = 0;
+          }
+        }
+
+        if (sourceMode === "DEMO_VIDEOS") {
+          await sendDemoControl(
+            "RESTART",
+            runtimes.map((runtime) => runtime.camera.id),
+          );
         }
 
         await Promise.all(runtimes.map((runtime) => runtime.video.play()));
+
         setStreams(
           Object.fromEntries(
             runtimes
-              .filter((runtime) => runtime.stream)
-              .map((runtime) => [
-                runtime.camera.id,
-                runtime.stream as MediaStream,
-              ]),
+              .filter((r) => r.stream)
+              .map((r) => [r.camera.id, r.stream as MediaStream]),
           ),
         );
         setVideos(
-          Object.fromEntries(
-            runtimes.map((runtime) => [runtime.camera.id, runtime.video]),
-          ),
+          Object.fromEntries(runtimes.map((r) => [r.camera.id, r.video])),
         );
         setPlaying(
+          Object.fromEntries(runtimes.map((r) => [r.camera.id, true])),
+        );
+
+        // Do not present zero as a completed detection before the first frame.
+        setMetrics(
           Object.fromEntries(
-            runtimes.map((runtime) => [runtime.camera.id, true]),
+            runtimes.map((runtime) => [
+              runtime.camera.id,
+              createWarmingMetric(runtime),
+            ]),
           ),
         );
         if (sourceMode === "LIVE_CAMERAS") {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(assignments));
-        } else {
-          await sendDemoControl(
-            "START",
-            runtimes.map((runtime) => runtime.camera.id),
-          );
         }
 
         runningRef.current = true;
         const generation = ++generationRef.current;
         setStatus("RUNNING");
+
+        // Set up video end and track disconnection listeners
         for (const runtime of runtimes) {
-          runtime.video.onended = () =>
+          runtime.video.onended = () => {
             setPlaying((current) => ({
               ...current,
               [runtime.camera.id]: false,
             }));
+          };
+
           for (const track of runtime.stream?.getVideoTracks() ?? []) {
             track.onended = () => {
               if (!runningRef.current || generation !== generationRef.current)
@@ -603,50 +726,101 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
               cleanup();
               setStatus("ERROR");
               setError(
-                runtime.camera.name +
-                  " was disconnected. Reconnect it and start again.",
+                `${runtime.camera.name} was disconnected. Reconnect it and restart.`,
               );
             };
           }
         }
 
+        // 4. Periodic synchronization monitor for multi-video playback
+        const syncInterval = window.setInterval(() => {
+          if (!runningRef.current || generation !== generationRef.current) {
+            window.clearInterval(syncInterval);
+            return;
+          }
+
+          if (sourceMode !== "DEMO_VIDEOS" || runtimes.length <= 1) return;
+
+          // Designate first active unended video as reference master
+          const master = runtimes.find(
+            (r) => !r.video.paused && !r.video.ended && r.video.readyState >= 2,
+          );
+          if (!master) return;
+
+          const masterTime = master.video.currentTime;
+
+          for (const slave of runtimes) {
+            if (slave === master) {
+              slave.syncDriftMs = 0;
+              continue;
+            }
+            if (slave.video.paused || slave.video.ended) continue;
+
+            const sync = calculateSyncCorrection(
+              slave.video.currentTime,
+              masterTime,
+              SYNC_TOLERANCE_SECONDS,
+            );
+
+            slave.syncDriftMs = sync.driftMs;
+
+            if (
+              sync.needsCorrection &&
+              !slave.video.seeking &&
+              slave.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+            ) {
+              slave.video.currentTime = masterTime;
+            }
+          }
+        }, 250);
+
+        // 5. Fair Round-Robin AI Inference Scheduler
         void (async () => {
           let consecutiveFailures = 0;
           const tickMilliseconds = 1000 / ANALYSIS_TICKS_PER_SECOND;
           let runtimeIndex = 0;
+
           while (runningRef.current && generation === generationRef.current) {
             const tickStartedAt = performance.now();
             const runtime = runtimes[runtimeIndex % runtimes.length];
             runtimeIndex += 1;
+
             if (!runningRef.current || generation !== generationRef.current)
-              return;
+              break;
+
             if (
               runtime.video.paused ||
               runtime.video.ended ||
+              runtime.video.seeking ||
               runtime.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
             ) {
+              runtime.skippedFrames += 1;
               await wait(tickMilliseconds);
               continue;
             }
+
             try {
               await new Promise<void>((resolve) =>
                 window.requestAnimationFrame(() => resolve()),
               );
-              await publish(runtime, model);
+              await analyzeRuntime(runtime, model);
               consecutiveFailures = 0;
             } catch (reason) {
               consecutiveFailures += 1;
-              if (consecutiveFailures >= 3) {
+              console.warn("Camera inference frame error", reason);
+              if (consecutiveFailures >= 5) {
                 cleanup();
                 setStatus("ERROR");
                 setError(readableCameraError(reason));
-                return;
+                break;
               }
             }
+
             const remaining =
               tickMilliseconds - (performance.now() - tickStartedAt);
-            await wait(Math.max(0, remaining));
+            await wait(Math.max(4, remaining));
           }
+          window.clearInterval(syncInterval);
         })();
       } catch (reason) {
         cleanup();
@@ -654,7 +828,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         setError(readableCameraError(reason));
       }
     },
-    [assignments, cleanup, publish, sourceMode, videoFiles],
+    [analyzeRuntime, assignments, cleanup, sourceMode, videoFiles],
   );
 
   const playOne = useCallback(async (cameraId: string) => {
@@ -664,7 +838,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     if (!runtime) return;
     await runtime.video.play();
     if (runtime.sourceMode === "DEMO_VIDEOS") {
-      await sendDemoControl("START", [cameraId]);
+      void sendDemoControl("START", [cameraId]);
     }
     setPlaying((current) => ({ ...current, [cameraId]: true }));
   }, []);
@@ -676,7 +850,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     if (!runtime) return;
     runtime.video.pause();
     if (runtime.sourceMode === "DEMO_VIDEOS") {
-      await sendDemoControl("PAUSE", [cameraId]);
+      void sendDemoControl("PAUSE", [cameraId]);
     }
     setPlaying((current) => ({ ...current, [cameraId]: false }));
   }, []);
@@ -686,38 +860,71 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       (candidate) => candidate.camera.id === cameraId,
     );
     if (!runtime) return;
+
+    runtime.video.pause();
+    runtime.video.currentTime = 0;
+    runtime.lastAnalyzedAt = 0;
+    runtime.lastRisk = 0;
+    runtime.boxes = [];
+    runtime.hasAnalyzed = false;
+    setMetrics((current) => ({
+      ...current,
+      [cameraId]: createWarmingMetric(runtime),
+    }));
+
     if (runtime.sourceMode === "DEMO_VIDEOS") {
       await sendDemoControl("RESTART", [cameraId]);
     }
-    runtime.lastAnalyzedAt = 0;
-    runtime.lastRisk = 0;
-    runtime.video.currentTime = 0;
     await runtime.video.play();
     setPlaying((current) => ({ ...current, [cameraId]: true }));
   }, []);
-
   const playAll = useCallback(async () => {
     const runtimes = runtimesRef.current;
-    await Promise.all(runtimes.map((runtime) => runtime.video.play()));
+    const activeRuntimes = runtimes.filter((r) => !r.video.ended);
+
+    // Sync non-ended videos to master time if paused
+    const master =
+      activeRuntimes.find((r) => !r.video.paused) ?? activeRuntimes[0];
+    if (master && sourceMode === "DEMO_VIDEOS") {
+      for (const r of activeRuntimes) {
+        if (
+          r !== master &&
+          Math.abs(r.video.currentTime - master.video.currentTime) >
+            SYNC_TOLERANCE_SECONDS
+        ) {
+          r.video.currentTime = master.video.currentTime;
+        }
+      }
+    }
+
+    await Promise.all(activeRuntimes.map((runtime) => runtime.video.play()));
+
     const demoIds = runtimes
       .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
       .map((runtime) => runtime.camera.id);
-    if (demoIds.length) await sendDemoControl("START", demoIds);
-    setPlaying(
-      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, true])),
-    );
-  }, []);
+    if (demoIds.length) void sendDemoControl("START", demoIds);
+
+    setPlaying((current) => {
+      const next = { ...current };
+      for (const r of activeRuntimes) next[r.camera.id] = true;
+      return next;
+    });
+  }, [sourceMode]);
 
   const pauseAll = useCallback(async () => {
     const runtimes = runtimesRef.current;
     for (const runtime of runtimes) runtime.video.pause();
-    setPlaying(
-      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, false])),
-    );
+
+    setPlaying((current) => {
+      const next = { ...current };
+      for (const r of runtimes) next[r.camera.id] = false;
+      return next;
+    });
+
     const demoIds = runtimes
       .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
       .map((runtime) => runtime.camera.id);
-    if (demoIds.length) await sendDemoControl("PAUSE", demoIds);
+    if (demoIds.length) void sendDemoControl("PAUSE", demoIds);
   }, []);
 
   const restartAll = useCallback(async () => {
@@ -725,12 +932,25 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     const demoIds = runtimes
       .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
       .map((runtime) => runtime.camera.id);
-    if (demoIds.length) await sendDemoControl("RESTART", demoIds);
+
     for (const runtime of runtimes) {
+      runtime.video.pause();
+      runtime.video.currentTime = 0;
       runtime.lastAnalyzedAt = 0;
       runtime.lastRisk = 0;
-      runtime.video.currentTime = 0;
+      runtime.boxes = [];
+      runtime.hasAnalyzed = false;
     }
+    setMetrics(
+      Object.fromEntries(
+        runtimes.map((runtime) => [
+          runtime.camera.id,
+          createWarmingMetric(runtime),
+        ]),
+      ),
+    );
+
+    if (demoIds.length) await sendDemoControl("RESTART", demoIds);
     await Promise.all(runtimes.map((runtime) => runtime.video.play()));
     setPlaying(
       Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, true])),
@@ -747,6 +967,8 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       videos,
       playing,
       metrics,
+      confidenceThreshold,
+      setConfidenceThreshold,
       error,
       prepare,
       setSourceMode,
@@ -771,6 +993,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       videos,
       playing,
       metrics,
+      confidenceThreshold,
       error,
       prepare,
       setSourceMode,
@@ -786,6 +1009,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       stop,
     ],
   );
+
   return (
     <BrowserCameraContext.Provider value={value}>
       {children}

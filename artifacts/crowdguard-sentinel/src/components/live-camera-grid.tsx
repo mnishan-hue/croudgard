@@ -4,6 +4,7 @@ import { Link } from "wouter";
 import { CameraStream } from "@/components/camera-stream";
 import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 import type { BackendSnapshot } from "@/types/sentinel";
+import type { CameraAnalysisMetrics } from "@/lib/cv-detection";
 
 export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
   const station = useBrowserCameras();
@@ -37,7 +38,38 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
         const browserSource = Boolean(station.videos[camera.id]);
         const recorded = browserSource && station.sourceMode === "DEMO_VIDEOS";
         const browserMetric = station.metrics[camera.id];
-        const analyzed = live || Boolean(browserMetric);
+        const isRunning = station.status === "RUNNING";
+
+        const hasAnalyzedData = browserMetric && !browserMetric.isWarmingUp;
+
+        const peopleDisplay = hasAnalyzedData
+          ? browserMetric.peopleCount
+          : live && primary?.metrics.people_count !== undefined
+            ? primary.metrics.people_count
+            : isRunning
+              ? "Warming up"
+              : "—";
+
+        const riskValue = hasAnalyzedData
+          ? Math.round(browserMetric.riskScore)
+          : live
+            ? Math.round(primary?.risk ?? 0)
+            : "—";
+
+        const trendValue = hasAnalyzedData
+          ? browserMetric.trend
+          : live
+            ? (primary?.metrics.trend ?? "—")
+            : "—";
+
+        const fpsValue =
+          hasAnalyzedData && browserMetric.fps > 0
+            ? `${browserMetric.fps.toFixed(1)} AI`
+            : live && primary?.metrics.fps
+              ? `${primary.metrics.fps.toFixed(1)} AI`
+              : isRunning
+                ? "Starting"
+                : "—";
 
         return (
           <Link
@@ -45,12 +77,13 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
             href={"/cameras/" + encodeURIComponent(camera.id)}
             className="group overflow-hidden border border-border bg-card transition-colors hover:border-primary/50"
           >
-            <div className="relative">
+            <div className="relative aspect-video overflow-hidden bg-[#071019]">
               {browserSource ? (
-                <NativeCameraStream
+                <DirectCameraFeed
                   cameraName={camera.name}
-                  source={station.videos[camera.id]}
+                  sourceVideo={station.videos[camera.id]}
                   stream={station.streams[camera.id]}
+                  metric={browserMetric}
                 />
               ) : (
                 <CameraStream
@@ -65,13 +98,13 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                 className="absolute right-3 top-3 z-10 text-muted-foreground group-hover:text-primary"
               />
               {browserSource && (
-                <div className="absolute bottom-2 left-2 z-10 flex gap-1">
-                  <span className="status-chip py-1 text-secondary">
+                <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex gap-1">
+                  <span className="status-chip py-0.5 text-[8px] text-secondary">
                     {recorded ? "RECORDED VIDEO" : "LIVE CAMERA"}
                   </span>
-                  <span className="status-chip py-1 text-secondary">
+                  <span className="status-chip py-0.5 text-[8px] text-secondary">
                     <span className="status-pulse h-1.5 w-1.5 rounded-full bg-secondary" />
-                    ANALYSIS LIVE
+                    {hasAnalyzedData ? "ANALYSIS LIVE" : "AI WARMING UP"}
                   </span>
                 </div>
               )}
@@ -84,42 +117,36 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                     {zones.map((zone) => zone.name).join(", ") || "Unassigned"}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 data-mono text-[10px] text-secondary">
-                  <Users size={12} />
-                  {analyzed
-                    ? (browserMetric?.peopleCount ??
-                      primary?.metrics.people_count ??
-                      0)
-                    : "—"}
+                <div className="flex items-center gap-1.5 data-mono text-[11px] font-semibold text-secondary">
+                  <Users size={13} />
+                  <span>{peopleDisplay}</span>
+                  {typeof peopleDisplay === "number" && (
+                    <span className="text-[9px] font-normal text-muted-foreground">
+                      people
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-4 gap-px bg-border">
                 <Datum
                   label="STATE"
                   value={
-                    live
-                      ? (primary?.crowd_state.replaceAll("_", " ") ?? "NO DATA")
-                      : "NO DATA"
+                    hasAnalyzedData
+                      ? stateForRisk(browserMetric.riskScore)
+                      : live
+                        ? (primary?.crowd_state.replaceAll("_", " ") ??
+                          "NO DATA")
+                        : isRunning
+                          ? "INITIALIZING"
+                          : "NO DATA"
                   }
                 />
                 <Datum
                   label="RISK"
-                  value={live ? String(Math.round(primary?.risk ?? 0)) : "—"}
+                  value={riskValue !== "—" ? `${riskValue}%` : "—"}
                 />
-                <Datum
-                  label="TREND"
-                  value={live ? (primary?.metrics.trend ?? "—") : "—"}
-                />
-                <Datum
-                  label="FPS"
-                  value={
-                    browserMetric?.fps
-                      ? browserMetric.fps.toFixed(1)
-                      : live && primary?.metrics.fps
-                        ? primary.metrics.fps.toFixed(1)
-                        : "—"
-                  }
-                />
+                <Datum label="TREND" value={trendValue} />
+                <Datum label="FPS" value={fpsValue} />
               </div>
             </div>
           </Link>
@@ -134,64 +161,151 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
   );
 }
 
-function NativeCameraStream({
+function DirectCameraFeed({
   cameraName,
-  source,
+  sourceVideo,
   stream,
+  metric,
 }: {
   cameraName: string;
-  source: HTMLVideoElement;
+  sourceVideo: HTMLVideoElement;
   stream?: MediaStream;
+  metric?: CameraAnalysisMetrics;
 }) {
-  const ref = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Keep a stable display element. The AI source video is never moved between
+  // the dashboard and source dialog, avoiding detachments and playback stalls.
   useEffect(() => {
-    const video = ref.current;
-    if (!video) return;
-    video.muted = true;
-    video.playsInline = true;
+    const displayVideo = videoRef.current;
+    if (!displayVideo) return;
+
+    displayVideo.muted = true;
+    displayVideo.playsInline = true;
+    let capturedStream: MediaStream | undefined;
+    let synchronizationTimer: number | undefined;
 
     if (stream) {
-      video.srcObject = stream;
-      void video.play().catch(() => undefined);
-      return () => {
-        video.pause();
-        video.srcObject = null;
+      displayVideo.srcObject = stream;
+    } else {
+      const capturable = sourceVideo as HTMLVideoElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
       };
+      const capture = capturable.captureStream ?? capturable.mozCaptureStream;
+      if (capture) {
+        try {
+          capturedStream = capture.call(sourceVideo);
+          displayVideo.srcObject = capturedStream;
+        } catch {
+          capturedStream = undefined;
+        }
+      }
+
+      if (!capturedStream) {
+        displayVideo.srcObject = null;
+        displayVideo.src = sourceVideo.currentSrc || sourceVideo.src;
+        const synchronize = () => {
+          if (
+            Math.abs(displayVideo.currentTime - sourceVideo.currentTime) > 0.25
+          ) {
+            displayVideo.currentTime = sourceVideo.currentTime;
+          }
+          displayVideo.playbackRate = sourceVideo.playbackRate;
+          if (sourceVideo.paused) displayVideo.pause();
+          else void displayVideo.play().catch(() => undefined);
+        };
+        synchronize();
+        synchronizationTimer = window.setInterval(synchronize, 300);
+      }
     }
 
-    video.srcObject = null;
-    video.src = source.currentSrc || source.src;
-    const synchronize = () => {
-      if (Math.abs(video.currentTime - source.currentTime) > 0.25) {
-        video.currentTime = source.currentTime;
-      }
-      video.playbackRate = source.playbackRate;
-      if (source.paused) video.pause();
-      else void video.play().catch(() => undefined);
-    };
-    synchronize();
-    const timer = window.setInterval(synchronize, 300);
+    if (!sourceVideo.paused) {
+      void displayVideo.play().catch(() => undefined);
+    }
+
     return () => {
-      window.clearInterval(timer);
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
+      if (synchronizationTimer !== undefined) {
+        window.clearInterval(synchronizationTimer);
+      }
+      displayVideo.pause();
+      displayVideo.srcObject = null;
+      displayVideo.removeAttribute("src");
+      displayVideo.load();
+      capturedStream?.getTracks().forEach((track) => track.stop());
     };
-  }, [source, stream]);
+  }, [sourceVideo, stream]);
+
+  // Redraw only when a new AI result arrives, not on every video frame.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const displayWidth = canvas.clientWidth || 300;
+    const displayHeight = canvas.clientHeight || 168;
+    if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+      canvas.width = displayWidth;
+      canvas.height = displayHeight;
+    }
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!metric || metric.isWarmingUp || !metric.boxes.length) return;
+
+    const sourceWidth = 300;
+    const sourceHeight = Math.round(
+      ((sourceVideo.videoHeight || 360) / (sourceVideo.videoWidth || 640)) *
+        300,
+    );
+    const scaleX = displayWidth / sourceWidth;
+    const scaleY = displayHeight / (sourceHeight || 168);
+
+    context.lineWidth = 2;
+    context.strokeStyle = "#2dd4bf";
+    context.fillStyle = "#071019cc";
+    context.font = "bold 10px monospace";
+
+    for (const person of metric.boxes) {
+      const [x, y, boxWidth, boxHeight] = person.bbox;
+      const left = x * scaleX;
+      const top = y * scaleY;
+      const width = boxWidth * scaleX;
+      const height = boxHeight * scaleY;
+      context.strokeRect(left, top, width, height);
+
+      const label = `PERSON ${Math.round(person.score * 100)}%`;
+      const textWidth = context.measureText(label).width + 6;
+      context.fillRect(left, Math.max(0, top - 15), textWidth, 15);
+      context.fillStyle = "#2dd4bf";
+      context.fillText(label, left + 3, Math.max(10, top - 3));
+      context.fillStyle = "#071019cc";
+    }
+
+    context.fillStyle = "#071019e0";
+    context.fillRect(6, 6, 120, 20);
+    context.fillStyle = "#2dd4bf";
+    context.fillText(`LIVE AI · ${metric.peopleCount} PEOPLE`, 12, 20);
+  }, [metric, sourceVideo]);
 
   return (
-    <div className="relative aspect-video overflow-hidden bg-[#071019]">
+    <div className="relative h-full w-full bg-[#071019]">
       <video
-        ref={ref}
+        ref={videoRef}
         autoPlay
         muted
         playsInline
         className="h-full w-full object-contain"
         aria-label={`Native live footage from ${cameraName}`}
       />
-      <div className="absolute left-2 top-2 flex items-center gap-1.5 rounded-sm border border-secondary/40 bg-[#071019]/80 px-2 py-1 data-mono text-[7px] text-secondary backdrop-blur">
-        <Radio size={9} /> NATIVE LIVE VIDEO
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+      />
+      <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-sm border border-secondary/40 bg-[#071019]/80 px-2 py-1 data-mono text-[7px] text-secondary backdrop-blur">
+        <Radio size={9} /> NATIVE LIVE VIDEO · {cameraName}
       </div>
     </div>
   );
@@ -200,7 +314,17 @@ function Datum({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-card p-2">
       <div className="data-mono text-[7px] text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-[9px] text-foreground">{value}</div>
+      <div className="mt-1 truncate text-[9px] font-medium text-foreground">
+        {value}
+      </div>
     </div>
   );
+}
+
+function stateForRisk(risk: number): string {
+  if (risk >= 90) return "CRITICAL RISK";
+  if (risk >= 75) return "FLOW INSTABILITY";
+  if (risk >= 60) return "CONGESTED";
+  if (risk >= 40) return "CONGESTION BUILDING";
+  return "NORMAL";
 }

@@ -107,7 +107,7 @@ class CrowdGuardService:
     def control_demo_videos(self, request):
         camera_ids = list(dict.fromkeys(request.camera_ids))
         cameras = [self._camera(camera_id) for camera_id in camera_ids]
-        if request.action == "RESTART":
+        if request.action in {"RESTART", "STOP"}:
             for camera in cameras:
                 self.camera_people_counts.pop(camera.id, None)
                 self.camera_crowd_observations.pop(camera.id, None)
@@ -116,8 +116,25 @@ class CrowdGuardService:
             self.risk_history.clear()
             self.risk_timeline.clear()
             self.last_dispatched_command.clear()
+            if self.store.get_setting("automatic_control") == "true":
+                try:
+                    self.dispatch_decision(
+                        Decision(
+                            action="NORMAL",
+                            reason="Camera analysis reset to a safe neutral state.",
+                        ),
+                        force=True,
+                    )
+                except ConnectionError as exc:
+                    self.store.add_event(
+                        EventLog(
+                            category="HARDWARE",
+                            severity="WARNING",
+                            message=str(exc),
+                        )
+                    )
         names = ", ".join(camera.name for camera in cameras)
-        self.store.add_event(EventLog(category="DEMO_VIDEO", message=f"Recorded video sources {request.action.lower()}: {names}"))
+        self.store.add_event(EventLog(category="DEMO_VIDEO", message=f"Camera sources {request.action.lower()}: {names}"))
         return {"action": request.action, "camera_ids": camera_ids, "snapshot": self.snapshot()}
 
     def _fresh_cv(self) -> dict[str, dict]:

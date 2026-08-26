@@ -17,18 +17,16 @@ const char* MDNS_NAME = "crowdguard-esp32";
 WebServer server(80);
 
 String armState = "NORMAL";
-String displayMessage = "NORMAL";
+String displayMessage = "THANK YOU VISIT AGAIN";
 String audioState = "IDLE";
 String audioCommand = "NONE";
 String exitAState = "NORMAL";
 String exitBState = "NORMAL";
 
 void applyHardwareState(const String& command, const String& exitId) {
-  // Safe demonstration output. Replace or extend this function with the
-  // project's servo, WS2812B, display and DFPlayer Mini drivers.
   if (command == "REDIRECT_TO_EXIT") {
     armState = "GUIDANCE";
-    displayMessage = exitId == "exit_a" ? "USE EXIT A" : "USE EXIT B";
+    displayMessage = exitId == "exit_a" ? "PLEASE USE EXIT A" : "PLEASE USE EXIT B";
     audioCommand = exitId == "exit_a" ? "PLEASE_USE_EXIT_A" : "PLEASE_USE_EXIT_B";
     audioState = "PLAYING";
     exitAState = exitId == "exit_a" ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
@@ -36,15 +34,15 @@ void applyHardwareState(const String& command, const String& exitId) {
     digitalWrite(LED_BUILTIN, HIGH);
   } else if (command == "CRITICAL") {
     armState = "SAFE_NEUTRAL";
-    displayMessage = "PLEASE WAIT / FOLLOW STAFF";
-    audioCommand = "CAUTION";
+    displayMessage = "PLEASE WALK SLOWLY / MAINTAIN SPACE";
+    audioCommand = "PLEASE_WALK_SLOWLY";
     audioState = "PLAYING";
     exitAState = "CAUTION";
     exitBState = "CAUTION";
     digitalWrite(LED_BUILTIN, HIGH);
   } else {
     armState = "NORMAL";
-    displayMessage = "NORMAL";
+    displayMessage = "THANK YOU VISIT AGAIN";
     audioCommand = "NONE";
     audioState = "IDLE";
     exitAState = "NORMAL";

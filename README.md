@@ -66,7 +66,7 @@ C:\cg-ai-venv\Scripts\python.exe -m backend.cv.multi_worker --config cameras.loc
 
 Every worker publishes annotated footage and current metrics. Live Control displays all active feeds simultaneously; FastAPI keeps only the newest JPEG per camera in memory and does not write video to disk. Decisions are finalized only when all enabled exits have fresh camera observations.
 
-Sources may be webcam/USB indices, RTSP URLs, or local video paths. See [AI pipeline](docs/AI_PIPELINE.md), [camera setup](docs/CAMERA_SETUP.md), [crowd metrics](docs/CROWD_METRICS.md), [ESP32 quick start](docs/ESP32_QUICKSTART.md), and [ESP32 protocol](docs/ESP32_PROTOCOL.md). A ready-to-flash starter sketch is included in [firmware/crowdguard_esp32](firmware/crowdguard_esp32).
+Sources may be webcam/USB indices, RTSP URLs, or local video paths. See [AI pipeline](docs/AI_PIPELINE.md), [camera setup](docs/CAMERA_SETUP.md), [crowd metrics](docs/CROWD_METRICS.md), [exit guidance](docs/EXIT_GUIDANCE.md), [ESP32 quick start](docs/ESP32_QUICKSTART.md), and [ESP32 protocol](docs/ESP32_PROTOCOL.md). A ready-to-flash starter sketch is included in [firmware/crowdguard_esp32](firmware/crowdguard_esp32).
 
 ## Live data and facilities
 

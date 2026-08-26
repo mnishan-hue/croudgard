@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
+  Activity,
   Camera,
   CheckCircle2,
   FileVideo2,
@@ -8,12 +9,14 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Sliders,
   Square,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 import type { Camera as FacilityCamera } from "@/types/sentinel";
+import type { CameraAnalysisMetrics } from "@/lib/cv-detection";
 
 export function BrowserCameraStation({
   cameras,
@@ -22,6 +25,8 @@ export function BrowserCameraStation({
 }) {
   const station = useBrowserCameras();
   const [open, setOpen] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+
   const enabled = cameras.filter((camera) => camera.enabled).slice(0, 3);
   const isDemo = station.sourceMode === "DEMO_VIDEOS";
   const selectedCount = enabled.filter((camera) =>
@@ -30,9 +35,12 @@ export function BrowserCameraStation({
       : Boolean(station.assignments[camera.id]),
   ).length;
   const runningCount = Object.keys(station.videos).length;
-  const busy = ["REQUESTING_PERMISSION", "LOADING_AI", "CONNECTING"].includes(
-    station.status,
-  );
+  const busy = [
+    "REQUESTING_PERMISSION",
+    "LOADING_AI",
+    "BUFFERING",
+    "CONNECTING",
+  ].includes(station.status);
 
   async function configure() {
     setOpen(true);
@@ -49,7 +57,9 @@ export function BrowserCameraStation({
           <div className="min-w-64 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-[14px] font-semibold">
-                {isDemo ? "Demonstration video mode" : "Browser camera station"}
+                {isDemo
+                  ? "Demonstration video mode (Main Area, Exit A, Exit B)"
+                  : "Browser camera station"}
               </h2>
               {station.status === "RUNNING" && (
                 <span className="status-chip py-1 text-secondary">
@@ -60,8 +70,8 @@ export function BrowserCameraStation({
             </div>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
               {isDemo
-                ? "Run up to three local recorded videos through the real CrowdGuard AI, risk, decision, and ESP32 pipeline."
-                : "Connect up to three USB cameras. Each live feed is analyzed independently and contributes to CrowdGuard."}
+                ? "Run three synchronized local videos through the real on-device person detection and safety decision pipeline."
+                : "Connect up to three physical USB cameras. Each feed is analyzed independently."}
             </p>
             {station.error && (
               <p className="mt-2 text-[10px] text-destructive">
@@ -70,20 +80,48 @@ export function BrowserCameraStation({
             )}
           </div>
           <div className="flex flex-wrap gap-2">
-            <ModeButton
-              active={!isDemo}
-              onClick={() => station.setSourceMode("LIVE_CAMERAS")}
-            >
-              Live cameras
-            </ModeButton>
-            <ModeButton
-              active={isDemo}
-              onClick={() => station.setSourceMode("DEMO_VIDEOS")}
-            >
-              Demo videos
-            </ModeButton>
+            {!station.status.includes("RUNNING") && (
+              <>
+                <ModeButton
+                  active={!isDemo}
+                  onClick={() => station.setSourceMode("LIVE_CAMERAS")}
+                >
+                  Live cameras
+                </ModeButton>
+                <ModeButton
+                  active={isDemo}
+                  onClick={() => station.setSourceMode("DEMO_VIDEOS")}
+                >
+                  Demo videos
+                </ModeButton>
+              </>
+            )}
             {station.status === "RUNNING" ? (
               <>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => void station.playAll()}
+                  title="Play all videos simultaneously"
+                >
+                  <Play size={12} /> Play All
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => void station.pauseAll()}
+                  title="Pause all videos simultaneously"
+                >
+                  <Pause size={12} /> Pause All
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => void station.restartAll()}
+                  title="Restart all videos simultaneously from time 0"
+                >
+                  <RotateCcw size={12} /> Restart All
+                </button>
                 <button
                   type="button"
                   className="button-secondary"
@@ -116,7 +154,7 @@ export function BrowserCameraStation({
                 {busy
                   ? "Preparing…"
                   : isDemo
-                    ? "Configure demo"
+                    ? "Configure 3-video demo"
                     : "Connect cameras"}
               </button>
             )}
@@ -136,17 +174,17 @@ export function BrowserCameraStation({
               <div>
                 <div className="data-mono text-[8px] text-secondary">
                   {isDemo
-                    ? "LOCAL RECORDED SOURCES · OFFLINE AI"
+                    ? "LOCAL SYNCHRONIZED SOURCES · OFFLINE COCO-SSD"
                     : "DIRECT BROWSER CAPTURE"}
                 </div>
                 <h2 className="mt-1 text-[18px] font-semibold">
                   {isDemo
-                    ? "Demonstration video mode"
+                    ? "3-Source demonstration mode"
                     : "Connect physical cameras"}
                 </h2>
                 <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
                   {isDemo
-                    ? "Choose Main Area, Exit A, and Exit B videos. Playback starts together while AI samples current frames without slowing the native video."
+                    ? "Choose Main Area, Exit A, and Exit B videos. All 3 files buffer and start together from time 0."
                     : "Assign a different device to each location. Keep this website open while monitoring."}
                 </p>
               </div>
@@ -164,12 +202,14 @@ export function BrowserCameraStation({
               {station.status === "REQUESTING_PERMISSION" ? (
                 <Waiting message="Waiting for camera permission…" />
               ) : station.status === "LOADING_AI" ? (
-                <Waiting message="Loading the on-device person detector…" />
+                <Waiting message="Loading the on-device COCO-SSD person detector…" />
+              ) : station.status === "BUFFERING" ? (
+                <Waiting message="Buffering video files for synchronized start…" />
               ) : station.status === "CONNECTING" ? (
                 <Waiting
                   message={
                     isDemo
-                      ? "Synchronizing recorded sources…"
+                      ? "Synchronizing recorded sources at time 0…"
                       : "Opening camera feeds…"
                   }
                 />
@@ -178,7 +218,7 @@ export function BrowserCameraStation({
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border border-secondary/30 bg-secondary/5 p-3">
                     <div className="data-mono text-[9px] text-secondary">
                       {isDemo
-                        ? "RECORDED VIDEO · ANALYSIS LIVE"
+                        ? "SYNCHRONIZED RECORDED VIDEO · ANALYSIS LIVE"
                         : "LIVE CAMERA · ANALYSIS LIVE"}
                     </div>
                     <div className="flex gap-2">
@@ -203,8 +243,70 @@ export function BrowserCameraStation({
                       >
                         <RotateCcw size={12} /> Restart all
                       </button>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => setShowDiagnostics((p) => !p)}
+                      >
+                        <Activity size={12} /> Diagnostics
+                      </button>
                     </div>
                   </div>
+
+                  {/* Confidence Slider */}
+                  <div className="mb-4 flex items-center justify-between border border-border bg-background p-3 text-[11px]">
+                    <div className="flex items-center gap-2">
+                      <Sliders size={13} className="text-secondary" />
+                      <span>Person confidence threshold:</span>
+                      <span className="font-mono text-secondary">
+                        {Math.round(station.confidenceThreshold * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.30"
+                      max="0.80"
+                      step="0.05"
+                      value={station.confidenceThreshold}
+                      onChange={(e) =>
+                        station.setConfidenceThreshold(parseFloat(e.target.value))
+                      }
+                      className="w-32 accent-secondary"
+                    />
+                  </div>
+
+                  {/* Diagnostics */}
+                  {showDiagnostics && (
+                    <div className="mb-4 border border-border bg-background/50 p-3 text-[10px]">
+                      <div className="font-semibold text-secondary mb-2">
+                        Performance Instrumentation
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {enabled
+                          .filter((c) => station.videos[c.id])
+                          .map((camera) => {
+                            const m = station.metrics[camera.id];
+                            return (
+                              <div
+                                key={camera.id}
+                                className="border border-border bg-card p-2"
+                              >
+                                <div className="font-semibold text-foreground">
+                                  {camera.name}
+                                </div>
+                                <div className="mt-1 space-y-0.5 text-muted-foreground">
+                                  <div>Inference: {m?.inferenceDurationMs ?? 0} ms</div>
+                                  <div>AI FPS: {m?.fps.toFixed(1) ?? 0}</div>
+                                  <div>Sync drift: {m?.syncDriftMs ?? 0} ms</div>
+                                  <div>Skipped frames: {m?.skippedFrames ?? 0}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid gap-3 md:grid-cols-3">
                     {enabled
                       .filter((camera) => station.videos[camera.id])
@@ -212,12 +314,9 @@ export function BrowserCameraStation({
                         <LocalPreview
                           key={camera.id}
                           camera={camera}
-                          video={station.videos[camera.id]}
                           recorded={isDemo}
                           playing={station.playing[camera.id]}
-                          people={station.metrics[camera.id]?.peopleCount}
-                          confidence={station.metrics[camera.id]?.confidence}
-                          fps={station.metrics[camera.id]?.fps}
+                          metric={station.metrics[camera.id]}
                           onPlay={() => void station.playOne(camera.id)}
                           onPause={() => void station.pauseOne(camera.id)}
                           onRestart={() => void station.restartOne(camera.id)}
@@ -264,8 +363,6 @@ export function BrowserCameraStation({
                         )}
                         {station.devices.length} physical camera
                         {station.devices.length === 1 ? "" : "s"} detected
-                        {station.devices.length < 3 &&
-                          " · You can start now and add more later."}
                       </div>
                       <div className="grid gap-3 md:grid-cols-3">
                         {enabled.map((camera, index) => (
@@ -274,14 +371,10 @@ export function BrowserCameraStation({
                             className="border border-border bg-card p-4"
                           >
                             <span className="data-mono text-[8px] text-secondary">
-                              CAMERA {index + 1}
+                              LOCATION {index + 1}
                             </span>
                             <span className="mt-1 block text-[13px] font-semibold">
                               {camera.name}
-                            </span>
-                            <span className="mt-1 block text-[9px] text-muted-foreground">
-                              {camera.zone_ids.join(", ") ||
-                                "Unassigned location"}
                             </span>
                             <select
                               value={station.assignments[camera.id] ?? ""}
@@ -334,8 +427,7 @@ export function BrowserCameraStation({
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/30 p-4">
               <p className="max-w-2xl text-[9px] text-muted-foreground">
-                One offline COCO-SSD model is shared by all sources. Only
-                current frames are sampled; no inference queue is retained.
+                One offline COCO-SSD model is shared by all sources. Analysis runs on resized frames without interrupting native playback.
               </p>
               <div className="flex gap-2">
                 {station.status === "RUNNING" ? (
@@ -366,7 +458,7 @@ export function BrowserCameraStation({
                     >
                       <CheckCircle2 size={13} />{" "}
                       {isDemo
-                        ? "Start demonstration"
+                        ? "Start 3-source demonstration"
                         : "Start " +
                           (selectedCount || "selected") +
                           " camera" +
@@ -414,18 +506,16 @@ function VideoFileSlot({
   file?: File;
   onFile(file?: File): void;
 }) {
+  const slotLabels = ["1. Main Area", "2. Exit A", "3. Exit B"];
   return (
     <div className="border border-border bg-card p-4">
       <div className="data-mono text-[8px] text-secondary">
-        SOURCE {index + 1}
+        {slotLabels[index] ?? `SOURCE ${index + 1}`}
       </div>
       <div className="mt-1 text-[13px] font-semibold">{camera.name}</div>
-      <div className="mt-1 text-[9px] text-muted-foreground">
-        {camera.zone_ids.join(", ") || "Unassigned location"}
-      </div>
       <div className="mt-4 rounded-md border border-dashed border-border bg-background/40 p-4 text-center">
         <FileVideo2 size={24} className="mx-auto text-secondary" />
-        <div className="mt-2 truncate text-[10px]">
+        <div className="mt-2 truncate text-[10px] font-medium">
           {file?.name ?? "No video selected"}
         </div>
         <div className="mt-1 data-mono text-[7px] text-muted-foreground">
@@ -433,7 +523,7 @@ function VideoFileSlot({
             ? (file.size / 1_048_576).toFixed(1) + " MB · LOCAL FILE"
             : "MP4 · WEBM · MOV"}
         </div>
-        <label className="button-secondary mt-3 inline-flex cursor-pointer">
+        <label className="button-secondary mt-3 inline-flex cursor-pointer text-xs">
           {file ? "Replace video" : "Select video"}
           <input
             type="file"
@@ -474,48 +564,32 @@ function Waiting({ message }: { message: string }) {
 
 function LocalPreview({
   camera,
-  video,
   recorded,
   playing,
-  people,
-  confidence,
-  fps,
+  metric,
   onPlay,
   onPause,
   onRestart,
 }: {
   camera: FacilityCamera;
-  video: HTMLVideoElement;
   recorded: boolean;
   playing?: boolean;
-  people?: number;
-  confidence?: number;
-  fps?: number;
+  metric?: CameraAnalysisMetrics;
   onPlay(): void;
   onPause(): void;
   onRestart(): void;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    video.className = "h-full w-full object-contain";
-    host.replaceChildren(video);
-    return () => {
-      if (video.parentElement === host) host.removeChild(video);
-    };
-  }, [video]);
+  const isWarmingUp = metric?.isWarmingUp ?? true;
 
   return (
     <div className="overflow-hidden border border-secondary/30 bg-card">
-      <div ref={hostRef} className="relative aspect-video bg-[#071019]" />
-      <div className="flex flex-wrap gap-1 border-t border-border px-3 py-2">
+      <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
         <span className="status-chip py-1 text-secondary">
           {recorded ? "RECORDED VIDEO" : "LIVE CAMERA"}
         </span>
         <span className="status-chip py-1 text-secondary">
           <span className="status-pulse h-1.5 w-1.5 rounded-full bg-secondary" />{" "}
-          ANALYSIS LIVE
+          {isWarmingUp ? "AI WARMING UP" : "ANALYSIS LIVE"}
         </span>
       </div>
       <div className="p-3">
@@ -523,16 +597,17 @@ function LocalPreview({
           <div>
             <div className="text-[11px] font-semibold">{camera.name}</div>
             <div className="mt-1 data-mono text-[7px] text-muted-foreground">
-              {camera.id}
+              {playing ? "PLAYING" : "PAUSED"}
             </div>
           </div>
-          <div className="text-right data-mono text-[8px] text-secondary">
-            <div>{people ?? "—"} PEOPLE</div>
+          <div className="text-right data-mono text-[9px] text-secondary">
+            <div className="text-sm font-semibold">
+              {isWarmingUp ? "—" : `${metric?.peopleCount ?? 0} PEOPLE`}
+            </div>
             <div className="mt-1 text-muted-foreground">
-              {fps ? fps.toFixed(1) + " AI FPS" : "AI STARTING"}
-              {confidence !== undefined
-                ? " · " + Math.round(confidence * 100) + "% CONF"
-                : ""}
+              {metric?.fps
+                ? `${metric.fps.toFixed(1)} AI FPS (${metric.inferenceDurationMs}ms)`
+                : "AI STARTING"}
             </div>
           </div>
         </div>

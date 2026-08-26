@@ -5,7 +5,6 @@ import {
   Camera,
   CheckCircle2,
   Cpu,
-  Map,
   ShieldAlert,
   Sparkles,
   Users,
@@ -23,21 +22,25 @@ export default function Operations() {
   const cameraStation = useBrowserCameras();
   const [changingAuto, setChangingAuto] = useState(false);
 
-  const totalPeople = useMemo(() => {
+  const isLocalRunning = cameraStation.status === "RUNNING";
+
+  const totalPeopleDisplay = useMemo(() => {
     const localMetrics = Object.values(cameraStation.metrics);
-    if (cameraStation.status === "RUNNING" && localMetrics.length) {
-      return localMetrics.reduce(
-        (total, metric) => total + metric.peopleCount,
+    if (isLocalRunning && localMetrics.length) {
+      const readyMetrics = localMetrics.filter((m) => !m.isWarmingUp);
+      if (!readyMetrics.length) return "AI warming up";
+      const sum = readyMetrics.reduce((acc, m) => acc + m.peopleCount, 0);
+      return String(sum);
+    }
+    if (snapshot?.reporting_camera_ids?.length) {
+      const sum = snapshot.facility.zones.reduce(
+        (acc, zone) => acc + zone.metrics.people_count,
         0,
       );
+      return String(sum);
     }
-    return (
-      snapshot?.facility.zones.reduce(
-        (total, zone) => total + zone.metrics.people_count,
-        0,
-      ) ?? 0
-    );
-  }, [cameraStation.metrics, cameraStation.status, snapshot]);
+    return "—";
+  }, [cameraStation.metrics, isLocalRunning, snapshot]);
 
   if (!snapshot) {
     return (
@@ -68,8 +71,7 @@ export default function Operations() {
     (sentinel) => sentinel.connected,
   ).length;
   const risk = Math.round(prediction.risk);
-  const localMonitoring = cameraStation.status === "RUNNING";
-  const monitoring = snapshot.camera_ai_active || localMonitoring;
+  const monitoring = snapshot.camera_ai_active || isLocalRunning;
   const activeCameraCount = Math.max(
     snapshot.reporting_camera_ids.length,
     Object.keys(cameraStation.metrics).length,
@@ -111,10 +113,10 @@ export default function Operations() {
       <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
           icon={Users}
-          label="People now"
-          value={monitoring ? String(totalPeople) : "—"}
+          label="People Index (Total)"
+          value={totalPeopleDisplay}
           detail={
-            monitoring ? "Across monitored zones" : "Start a camera source"
+            monitoring ? "Sum of all monitored zones" : "Start a camera source"
           }
           tone="teal"
         />
@@ -133,7 +135,7 @@ export default function Operations() {
           icon={Camera}
           label="Camera AI"
           value={`${activeCameraCount}/${facility.cameras.filter((camera) => camera.enabled).length}`}
-          detail="Sources reporting"
+          detail="3 Sources (Main, Exit A, Exit B)"
           tone={activeCameraCount ? "teal" : "amber"}
         />
         <Metric
@@ -150,10 +152,10 @@ export default function Operations() {
       </section>
 
       <Panel
-        title="Live cameras"
+        title="Live cameras (Main Area · Exit A · Exit B)"
         eyebrow={
           monitoring
-            ? "NATIVE PLAYBACK · BACKGROUND AI"
+            ? "SYNCHRONIZED NATIVE PLAYBACK · BACKGROUND AI"
             : "CONNECT A SOURCE ABOVE"
         }
         className="mb-5 rounded-xl"
@@ -181,6 +183,8 @@ export default function Operations() {
                 >
                   {decision.action === "NORMAL" ? (
                     <CheckCircle2 size={19} />
+                  ) : decision.action === "CRITICAL" ? (
+                    <ShieldAlert size={19} />
                   ) : (
                     <ArrowRight size={19} />
                   )}
@@ -189,9 +193,11 @@ export default function Operations() {
                   <h3 className="text-base font-semibold">
                     {!monitoring
                       ? "Connect cameras to begin"
-                      : recommendedExit
-                        ? `Guide people toward ${recommendedExit.name}`
-                        : "Normal crowd flow"}
+                      : decision.action === "CRITICAL"
+                        ? "Both exits crowded — walk slowly"
+                        : recommendedExit
+                          ? `Guide people toward ${recommendedExit.name}`
+                          : "Both exits clear"}
                   </h3>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {decision.reason}
@@ -288,7 +294,7 @@ export default function Operations() {
 
       <div className="mt-5 flex justify-end">
         <Link href="/hardware" className="button-secondary">
-          <Cpu size={13} /> Configure ESP32 <ArrowRight size={13} />
+          Configure ESP32 <ArrowRight size={13} />
         </Link>
       </div>
     </div>

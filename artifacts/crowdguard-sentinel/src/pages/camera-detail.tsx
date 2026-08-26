@@ -64,24 +64,57 @@ export default function CameraDetail() {
   const streaming = snapshot.streaming_camera_ids?.includes(camera.id) ?? false;
   const browserConnected =
     browserStation.status === "RUNNING" && Boolean(browserStation.videos[camera.id]);
+  const browserMetric = browserStation.metrics[camera.id];
+  const hasBrowserData = browserMetric && !browserMetric.isWarmingUp;
+
+  const peopleCount = hasBrowserData
+    ? browserMetric.peopleCount
+    : reporting
+      ? formatNumber(metrics?.people_count)
+      : "—";
+
+  const densityScore = hasBrowserData
+    ? formatNumber(browserMetric.densityScore, " / 100")
+    : reporting
+      ? formatNumber(metrics?.density, " / 100")
+      : "—";
+
+  const riskScore = hasBrowserData
+    ? formatNumber(browserMetric.riskScore, " / 100")
+    : reporting
+      ? formatNumber(primary?.risk, " / 100")
+      : "—";
+
+  const fpsScore = hasBrowserData
+    ? formatNumber(browserMetric.fps, " FPS", 1)
+    : reporting && metrics?.fps
+      ? formatNumber(metrics.fps, " FPS", 1)
+      : "—";
+
+  const trendScore = hasBrowserData
+    ? browserMetric.trend
+    : reporting
+      ? humanize(metrics?.trend ?? "UNAVAILABLE")
+      : "—";
+
   const values: [string, string, string?][] = [
-    ["Crowd condition", reporting?humanize(primary?.crowd_state ?? "NO DATA"):"—"],
-    ["People detected", reporting?formatNumber(metrics?.people_count):"—"],
-    ["Density score", reporting?formatNumber(metrics?.density, " / 100"):"—"],
-    ["Tracker speed", reporting&&metrics?.available_metrics.includes("movement")?formatNumber(metrics.average_speed, " px/s", 1):"Unavailable"],
-    ["Movement direction", reporting&&metrics?.movement_direction?humanize(metrics.movement_direction):"Unavailable"],
-    ["People entering", reporting&&metrics?.available_metrics.includes("inflow")?formatNumber(metrics.inflow):"Unavailable"],
-    ["People leaving", reporting&&metrics?.available_metrics.includes("outflow")?formatNumber(metrics.outflow):"Unavailable"],
-    ["People stopped", reporting&&metrics?.available_metrics.includes("stopped_percentage")?formatNumber(metrics.stopped_percentage, "%"):"Unavailable"],
-    ["Queue growth", reporting&&metrics?.available_metrics.includes("queue_growth")?formatNumber(metrics.queue_growth, " people/s", 2):"Unavailable"],
-    ["Direction conflict", reporting&&metrics?.available_metrics.includes("direction_conflict")?formatNumber(metrics?.direction_conflict, "%"):"Unavailable"],
-    ["Movement disturbance", reporting&&metrics?.experimental_metrics.includes("movement_disturbance")?`${humanize(snapshot.prediction.ripple_state)} · experimental`:"Unavailable"],
-    ["Current risk", reporting?formatNumber(primary?.risk, " / 100"):"—"],
-    ["Processing rate", reporting&&metrics?.fps?formatNumber(metrics.fps, " FPS", 1):"—"],
-    ["Trend", reporting?humanize(metrics?.trend??"UNAVAILABLE"):"—"],
+    ["Crowd condition", hasBrowserData ? humanize(browserMetric.trend) : reporting ? humanize(primary?.crowd_state ?? "NO DATA") : "—"],
+    ["People detected", String(peopleCount)],
+    ["Density score", String(densityScore)],
+    ["Tracker speed", reporting && metrics?.available_metrics.includes("movement") ? formatNumber(metrics.average_speed, " px/s", 1) : "Unavailable"],
+    ["Movement direction", reporting && metrics?.movement_direction ? humanize(metrics.movement_direction) : "Unavailable"],
+    ["People entering", reporting && metrics?.available_metrics.includes("inflow") ? formatNumber(metrics.inflow) : "Unavailable"],
+    ["People leaving", reporting && metrics?.available_metrics.includes("outflow") ? formatNumber(metrics.outflow) : "Unavailable"],
+    ["People stopped", reporting && metrics?.available_metrics.includes("stopped_percentage") ? formatNumber(metrics.stopped_percentage, "%") : "Unavailable"],
+    ["Queue growth", reporting && metrics?.available_metrics.includes("queue_growth") ? formatNumber(metrics.queue_growth, " people/s", 2) : "Unavailable"],
+    ["Direction conflict", reporting && metrics?.available_metrics.includes("direction_conflict") ? formatNumber(metrics?.direction_conflict, "%") : "Unavailable"],
+    ["Movement disturbance", reporting && metrics?.experimental_metrics.includes("movement_disturbance") ? `${humanize(snapshot.prediction.ripple_state)} · experimental` : "Unavailable"],
+    ["Current risk", String(riskScore)],
+    ["Processing rate", String(fpsScore)],
+    ["Trend", String(trendScore)],
   ];
 
-  const online = camera.enabled && camera.status === "ONLINE";
+  const online = camera.enabled && (camera.status === "ONLINE" || browserConnected);
 
   return (
     <div className="enter-rise">
@@ -100,19 +133,21 @@ export default function CameraDetail() {
           icon={online ? CircleCheck : CircleOff}
           label="Camera status"
           value={
-            reporting && streaming
-              ? "Video and AI reporting"
-              : reporting
-                ? "AI reporting · video unavailable"
-              : streaming
-                ? "Video streaming · AI waiting"
-              : online
-                ? "Configured · waiting for camera"
-              : camera.enabled
-                ? humanize(camera.status)
-                : "Disabled"
+            browserConnected
+              ? "Live browser camera active"
+              : reporting && streaming
+                ? "Video and AI reporting"
+                : reporting
+                  ? "AI reporting · video unavailable"
+                : streaming
+                  ? "Video streaming · AI waiting"
+                : online
+                  ? "Configured · waiting for camera"
+                : camera.enabled
+                  ? humanize(camera.status)
+                  : "Disabled"
           }
-          tone={reporting ? "good" : online ? "neutral" : "bad"}
+          tone={browserConnected || reporting ? "good" : online ? "neutral" : "bad"}
         />
         <Summary
           icon={MapPin}
@@ -124,16 +159,16 @@ export default function CameraDetail() {
         <Summary
           icon={ShieldCheck}
           label="AI analysis"
-          value={camera.ai_enabled ? reporting ? "Reporting live" : "Ready for live camera" : "Disabled"}
-          tone={reporting ? "good" : "neutral"}
+          value={camera.ai_enabled ? (browserConnected || reporting) ? "Reporting live" : "Ready for live camera" : "Disabled"}
+          tone={browserConnected || reporting ? "good" : "neutral"}
         />
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
         <Panel
           title="Live annotated footage"
-          eyebrow={streaming ? browserConnected ? browserStation.sourceMode === "DEMO_VIDEOS" ? "RECORDED VIDEO · ANALYSIS LIVE" : "LIVE CAMERA · ANALYSIS LIVE" : "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR CAMERA" : "CAMERA UNAVAILABLE"}
+          eyebrow={streaming || browserConnected ? browserConnected ? browserStation.sourceMode === "DEMO_VIDEOS" ? "RECORDED VIDEO · ANALYSIS LIVE" : "LIVE CAMERA · ANALYSIS LIVE" : "STREAMING FROM EDGE WORKER" : online ? "WAITING FOR CAMERA" : "CAMERA UNAVAILABLE"}
         >
-          <CameraStream cameraId={camera.id} cameraName={camera.name} streaming={streaming} />
+          <CameraStream cameraId={camera.id} cameraName={camera.name} streaming={streaming || browserConnected} />
           <p className="border-t border-border p-3 text-[9px] leading-relaxed text-muted-foreground">
             {browserConnected
               ? browserStation.sourceMode === "DEMO_VIDEOS" ? "This recorded source is analyzed by the shared offline COCO-SSD model. " : "Detection overlays are produced by COCO-SSD from the live camera in this browser. "
@@ -147,14 +182,16 @@ export default function CameraDetail() {
             {[
               ["Camera ID", camera.id],
               ["Camera type", humanize(camera.camera_type)],
-              ["AI provider", snapshot.ai_provider || "Not reported"],
+              ["AI provider", browserConnected ? "Browser COCO-SSD (On-Device)" : snapshot.ai_provider || "Not reported"],
               [
                 "AI confidence",
-                !reporting
-                  ? "Unavailable"
-                  : metrics?.people_count === 0
-                    ? "No people detected"
-                    : formatNumber(metrics?.confidence, "%"),
+                hasBrowserData
+                  ? `${Math.round(browserMetric.confidence * 100)}%`
+                  : !reporting
+                    ? "Unavailable"
+                    : metrics?.people_count === 0
+                      ? "No people detected"
+                      : formatNumber(metrics?.confidence, "%"),
               ],
               [
                 "Assigned zones",

@@ -26,9 +26,11 @@ import { apiFetch } from "@/services/api";
 import type { BackendSnapshot } from "@/types/sentinel";
 import { LiveCameraGrid } from "@/components/live-camera-grid";
 import { BrowserCameraStation } from "@/components/browser-camera-station";
+import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 
 export default function LiveControl() {
   const { snapshot, connection, refresh } = useSentinel();
+  const cameraStation = useBrowserCameras();
   const [controlConfirm, setControlConfirm] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
   const chart = useMemo(
@@ -84,7 +86,26 @@ export default function LiveControl() {
         ? "WORSENING"
         : "STABLE";
   const critical = prediction.risk >= 90;
-  const hasLiveAI = snapshot.camera_ai_active;
+  const isLocalRunning = cameraStation.status === "RUNNING";
+  const hasLiveAI = snapshot.camera_ai_active || isLocalRunning;
+  const localMetrics = Object.values(cameraStation.metrics);
+  const totalPeopleCount =
+    isLocalRunning && localMetrics.length
+      ? localMetrics.some((m) => !m.isWarmingUp)
+        ? String(
+            localMetrics
+              .filter((m) => !m.isWarmingUp)
+              .reduce((sum, m) => sum + m.peopleCount, 0),
+          )
+        : "—"
+      : hasLiveAI
+        ? String(
+            facility.zones.reduce(
+              (sum, zone) => sum + zone.metrics.people_count,
+              0,
+            ),
+          )
+        : "—";
 
   async function toggleAutomatic() {
     setControlBusy(true);
@@ -190,17 +211,8 @@ export default function LiveControl() {
         <Metric
           icon={Users}
           label="People detected"
-          value={
-            hasLiveAI
-              ? String(
-                  facility.zones.reduce(
-                    (sum, zone) => sum + zone.metrics.people_count,
-                    0,
-                  ),
-                )
-              : "—"
-          }
-          unit={hasLiveAI ? "people" : ""}
+          value={totalPeopleCount}
+          unit={hasLiveAI && totalPeopleCount !== "—" ? "people" : ""}
           note={hasLiveAI ? "Live camera count" : "Waiting for camera"}
         />
         <Metric

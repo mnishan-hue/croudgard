@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from backend.hardware.esp32_client import ESP32Client
 from backend.models import Sentinel
 
@@ -26,3 +28,29 @@ def test_esp32_heartbeat_verifies_device_id(monkeypatch):
     ESP32Client().heartbeat(sentinel)
     assert sentinel.connected is True
     assert sentinel.last_heartbeat is not None
+
+
+def test_blank_address_is_not_mock_hardware():
+    sentinel = Sentinel(
+        id="s1",
+        name="Unit",
+        junction_id="j1",
+        device_id="cg-01",
+        ip_address="",
+    )
+    with pytest.raises(ConnectionError, match="not configured"):
+        ESP32Client().heartbeat(sentinel)
+    assert sentinel.connected is False
+
+
+def test_mock_hardware_requires_explicit_mock_address():
+    sentinel = Sentinel(
+        id="s1",
+        name="Unit",
+        junction_id="j1",
+        device_id="cg-01",
+        ip_address="mock",
+    )
+    status = ESP32Client().heartbeat(sentinel)
+    assert status["status"] == "ready"
+    assert sentinel.connected is True
