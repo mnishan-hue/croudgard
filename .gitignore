@@ -60,3 +60,8 @@ Thumbs.db
 .local/
 
 .conversation/
+
+# Local AI video-generation artifacts.
+/.video-tools/
+/demo-videos/*.mp4
+/demo-videos/source-assets/

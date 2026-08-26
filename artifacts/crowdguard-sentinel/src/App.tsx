@@ -1,33 +1,34 @@
-import { lazy, Suspense, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { SentinelProvider } from '@/hooks/use-sentinel';
-import { BrowserCameraProvider } from '@/hooks/use-browser-cameras';
-import { SentinelShell } from '@/components/sentinel-shell';
-import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+import { lazy, Suspense, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { SentinelProvider } from "@/hooks/use-sentinel";
+import { BrowserCameraProvider } from "@/hooks/use-browser-cameras";
+import { OperatorShell } from "@/components/operator-shell";
+import { Route, Switch, useLocation, Router as WouterRouter } from "wouter";
 
-const LiveControl=lazy(()=>import('@/pages/live-control'));
-const Cameras=lazy(()=>import('@/pages/cameras'));
-const CameraDetail=lazy(()=>import('@/pages/camera-detail'));
-const Intelligence=lazy(()=>import('@/pages/intelligence'));
-const Hardware=lazy(()=>import('@/pages/hardware'));
-const Events=lazy(()=>import('@/pages/events'));
-const FacilityConfiguration=lazy(()=>import('@/pages/facility'));
-const NotFound=lazy(()=>import('@/pages/not-found'));
+const LiveControl = lazy(() => import("@/pages/operations"));
+const Cameras = lazy(() => import("@/pages/cameras"));
+const CameraDetail = lazy(() => import("@/pages/camera-detail"));
+const Intelligence = lazy(() => import("@/pages/intelligence"));
+const Hardware = lazy(() => import("@/pages/devices"));
+const Events = lazy(() => import("@/pages/events"));
+const FacilityConfiguration = lazy(() => import("@/pages/facility"));
+const NotFound = lazy(() => import("@/pages/not-found"));
 const queryClient = new QueryClient();
 
 function Router() {
   return (
-    <SentinelShell>
+    <OperatorShell>
       <RoutedErrorBoundary>
-        <Suspense fallback={<div className="panel grid min-h-64 place-items-center data-mono text-[10px] text-muted-foreground">LOADING OPERATIONS MODULE</div>}>
+        <Suspense
+          fallback={
+            <div className="panel grid min-h-64 place-items-center data-mono text-[10px] text-muted-foreground">
+              LOADING OPERATIONS MODULE
+            </div>
+          }
+        >
           <Switch>
             <Route path="/" component={LiveControl} />
             <Route path="/cameras/:cameraId" component={CameraDetail} />
@@ -40,7 +41,7 @@ function Router() {
           </Switch>
         </Suspense>
       </RoutedErrorBoundary>
-    </SentinelShell>
+    </OperatorShell>
   );
 }
 
@@ -55,7 +56,7 @@ function App() {
       <TooltipProvider>
         <SentinelProvider>
           <BrowserCameraProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <Router />
             </WouterRouter>
           </BrowserCameraProvider>

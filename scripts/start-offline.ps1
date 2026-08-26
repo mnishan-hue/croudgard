@@ -9,14 +9,27 @@ if (-not (Test-Path -LiteralPath $frontendIndex -PathType Leaf)) {
 }
 
 $venvPython = Join-Path $repoRoot '.venv\Scripts\python.exe'
-if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
-  $python = $venvPython
-} else {
-  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-  if ($null -eq $pythonCommand) {
-    throw 'Python not found. Install backend requirements before disconnecting.'
+$codexPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$pythonCandidates = @($venvPython, $codexPython)
+foreach ($commandName in @('python', 'python3')) {
+  foreach ($command in @(Get-Command $commandName -All -ErrorAction SilentlyContinue)) {
+    if ($command.Source -and $command.Source -notlike '*\WindowsApps\*') {
+      $pythonCandidates += $command.Source
+    }
   }
-  $python = $pythonCommand.Source
+}
+
+$python = $pythonCandidates |
+  Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+  Select-Object -First 1
+
+if ([string]::IsNullOrWhiteSpace($python)) {
+  throw 'A working Python runtime was not found. Create .venv and install backend/requirements.txt before disconnecting.'
+}
+
+& $python -c 'import fastapi, uvicorn' 2>$null
+if ($LASTEXITCODE -ne 0) {
+  throw 'The selected Python runtime is missing FastAPI or Uvicorn. Install backend/requirements.txt into .venv.'
 }
 
 if ([string]::IsNullOrWhiteSpace($env:CROWDGUARD_DB_PATH)) {

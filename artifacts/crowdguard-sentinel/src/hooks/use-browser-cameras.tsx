@@ -46,6 +46,7 @@ type RuntimeCamera = {
   canvas: HTMLCanvasElement;
   lastAnalyzedAt: number;
   lastRisk: number;
+  lastFramePublishedAt: number;
 };
 
 export type BrowserCameraMetric = {
@@ -83,7 +84,9 @@ const BrowserCameraContext = createContext<BrowserCameraContextValue | null>(
   null,
 );
 const STORAGE_KEY = "crowdguard.browser-camera-assignments.v1";
-const AI_TARGET_FPS = 3;
+const ANALYSIS_WIDTH = 416;
+const ANALYSIS_TICKS_PER_SECOND = 6;
+const FRAME_PUBLISH_INTERVAL_MS = 1_000;
 const MODEL_PATH = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/person_model/model.json`;
 
 let modelPromise: Promise<PersonModel> | null = null;
@@ -301,24 +304,24 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
 
   const publish = useCallback(
     async (runtime: RuntimeCamera, model: PersonModel) => {
-      const detections = await model.detect(runtime.video, 50, 0.5);
-      const people = detections.filter(
-        (detection) => detection.class === "person" && detection.score >= 0.55,
-      );
       const sourceWidth = runtime.video.videoWidth || 640;
       const sourceHeight = runtime.video.videoHeight || 360;
-      const width = Math.min(720, sourceWidth);
+      const width = Math.min(ANALYSIS_WIDTH, sourceWidth);
       const height = Math.max(
         1,
         Math.round((sourceHeight / sourceWidth) * width),
       );
       runtime.canvas.width = width;
       runtime.canvas.height = height;
-      const context = runtime.canvas.getContext("2d");
+      const context = runtime.canvas.getContext("2d", { alpha: false });
       if (!context) throw new Error("Camera drawing surface is unavailable");
       context.drawImage(runtime.video, 0, 0, width, height);
-      const scaleX = width / sourceWidth;
-      const scaleY = height / sourceHeight;
+      const detections = await model.detect(runtime.canvas, 30, 0.48);
+      const people = detections.filter(
+        (detection) => detection.class === "person" && detection.score >= 0.55,
+      );
+      const scaleX = 1;
+      const scaleY = 1;
       context.lineWidth = 2;
       context.font = "12px monospace";
       context.strokeStyle = "#2dd4bf";
@@ -347,7 +350,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         return sum + boxWidth * boxHeight;
       }, 0);
       const occupiedAreaRatio = clamp(
-        occupiedArea / (sourceWidth * sourceHeight),
+        occupiedArea / (width * height),
         0,
         1,
       );
@@ -374,17 +377,23 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       const confidence = people.length
         ? people.reduce((sum, person) => sum + person.score, 0) / people.length
         : 0.75;
-      const frame = await canvasBlob(runtime.canvas);
       const apiBase = serviceConfig.apiBaseUrl.replace(/\/$/, "");
+      const shouldPublishFrame =
+        now - runtime.lastFramePublishedAt >= FRAME_PUBLISH_INTERVAL_MS;
+      const frameRequest = shouldPublishFrame
+        ? canvasBlob(runtime.canvas).then((frame) =>
+            fetch(
+              `${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "image/jpeg" },
+                body: frame,
+              },
+            ),
+          )
+        : Promise.resolve(null);
       const [frameResponse, observationResponse] = await Promise.all([
-        fetch(
-          `${apiBase}/cameras/${encodeURIComponent(runtime.camera.id)}/frame`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "image/jpeg" },
-            body: frame,
-          },
-        ),
+        frameRequest,
         fetch(`${apiBase}/ai/cv-observation`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -403,9 +412,10 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
           }),
         }),
       ]);
-      if (!frameResponse.ok || !observationResponse.ok) {
+      if (frameResponse?.ok) runtime.lastFramePublishedAt = now;
+      if ((frameResponse && !frameResponse.ok) || !observationResponse.ok) {
         throw new Error(
-          `Backend rejected camera data (${frameResponse.status}/${observationResponse.status})`,
+          `Backend rejected camera data (${frameResponse?.status ?? "skipped"}/${observationResponse.status})`,
         );
       }
       setMetrics((current) => ({
@@ -490,7 +500,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
                 deviceId: { exact: deviceId },
                 width: { ideal: 640 },
                 height: { ideal: 360 },
-                frameRate: { ideal: 15, max: 24 },
+                frameRate: { ideal: 30, max: 30 },
               },
               audio: false,
             });
@@ -507,6 +517,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             canvas: document.createElement("canvas"),
             lastAnalyzedAt: 0,
             lastRisk: 0,
+            lastFramePublishedAt: 0,
           });
           runtimesRef.current = runtimes;
         }
@@ -566,34 +577,39 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
 
         void (async () => {
           let consecutiveFailures = 0;
-          const cycleMilliseconds = 1000 / AI_TARGET_FPS;
+          const tickMilliseconds = 1000 / ANALYSIS_TICKS_PER_SECOND;
+          let runtimeIndex = 0;
           while (runningRef.current && generation === generationRef.current) {
-            const cycleStartedAt = performance.now();
-            for (const runtime of runtimes) {
-              if (!runningRef.current || generation !== generationRef.current)
+            const tickStartedAt = performance.now();
+            const runtime = runtimes[runtimeIndex % runtimes.length];
+            runtimeIndex += 1;
+            if (!runningRef.current || generation !== generationRef.current)
+              return;
+            if (
+              runtime.video.paused ||
+              runtime.video.ended ||
+              runtime.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+            ) {
+              await wait(tickMilliseconds);
+              continue;
+            }
+            try {
+              await new Promise<void>((resolve) =>
+                window.requestAnimationFrame(() => resolve()),
+              );
+              await publish(runtime, model);
+              consecutiveFailures = 0;
+            } catch (reason) {
+              consecutiveFailures += 1;
+              if (consecutiveFailures >= 3) {
+                cleanup();
+                setStatus("ERROR");
+                setError(readableCameraError(reason));
                 return;
-              if (
-                runtime.video.paused ||
-                runtime.video.ended ||
-                runtime.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-              ) {
-                continue;
-              }
-              try {
-                await publish(runtime, model);
-                consecutiveFailures = 0;
-              } catch (reason) {
-                consecutiveFailures += 1;
-                if (consecutiveFailures >= 3) {
-                  cleanup();
-                  setStatus("ERROR");
-                  setError(readableCameraError(reason));
-                  return;
-                }
               }
             }
             const remaining =
-              cycleMilliseconds - (performance.now() - cycleStartedAt);
+              tickMilliseconds - (performance.now() - tickStartedAt);
             await wait(Math.max(0, remaining));
           }
         })();
