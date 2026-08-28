@@ -49,7 +49,11 @@ def compute_hardware_state(action: str, exit_id: str | None = None) -> HardwareS
         )
     if state == "BOTH_BUSY":
         return HardwareState(
-            arm_state="NEUTRAL",
+            arm_state=(
+                "REDIRECT_A" if exit_id == "exit_a"
+                else "REDIRECT_B" if exit_id == "exit_b"
+                else "NEUTRAL"
+            ),
             display_message="PLEASE WALK SLOWLY",
             audio="PLEASE_WALK_SLOWLY",
             audio_state="PLAYING",
@@ -131,10 +135,18 @@ class ESP32Client(HardwareClient):
             sentinel.acknowledged_state = state_name
             sentinel.command_acknowledged = True
             sentinel.last_error = None
-            sentinel.hardware_state = compute_hardware_state(state_name)
+            sentinel.hardware_state = compute_hardware_state(state_name, exit_id)
             return sentinel.hardware_state
 
-        payload = {"type": "SET_STATE", "device_id": sentinel.device_id, "state": state_name, "command_id": command_id}
+        payload = {
+            "type": "SET_STATE",
+            "device_id": sentinel.device_id,
+            "state": state_name,
+            "command_id": command_id,
+            "estimated_wait_minutes": command.get("estimated_wait_minutes"),
+            "estimated_wait_label": command.get("estimated_wait_label"),
+            "recommended_exit_id": command.get("recommended_exit_id"),
+        }
         last_error: Exception | None = None
         body: dict = {}
         for attempt in range(self.max_attempts):

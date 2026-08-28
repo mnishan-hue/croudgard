@@ -132,9 +132,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .status-pulse { animation: status-pulse 2.2s ease-in-out infinite; }
 .signal-flow { animation: signal-flow 1.8s ease-in-out infinite; }
 .enter-rise { animation: enter-rise .45s ease-out both; }
+.live-surface {
+  transition: background-color .35s ease, border-color .35s ease, box-shadow .35s ease, transform .25s ease;
+  will-change: background-color, border-color;
+}
+.live-value { animation: live-value .36s cubic-bezier(.2,.8,.2,1) both; }
 @keyframes status-pulse { 0%,100% { opacity: 1; } 50% { opacity: .48; } }
 @keyframes signal-flow { 0%,100% { transform: translateX(0); opacity: .48; } 50% { transform: translateX(3px); opacity: 1; } }
 @keyframes enter-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes live-value { from { opacity: .55; transform: translateY(3px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }.field {
   display: block;
   width: 100%;

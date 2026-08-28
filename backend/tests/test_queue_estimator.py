@@ -113,7 +113,7 @@ def test_required_queue_and_wait_scenarios():
         route_state="NEUTRAL",
     )
     assert low.queue_level == "LOW"
-    assert low.estimated_wait_label == "<2 min"
+    assert low.estimated_wait_label == "~5 min"
 
     moderate_one_clear = estimate_once(
         main_risk=42,
@@ -127,7 +127,7 @@ def test_required_queue_and_wait_scenarios():
         route_state="REDIRECT_B",
     )
     assert moderate_one_clear.queue_level == "MODERATE"
-    assert moderate_one_clear.estimated_wait_label == "~3 min"
+    assert moderate_one_clear.estimated_wait_label == "~10 min"
 
     high_one_clear = estimate_once(
         main_risk=65,
@@ -141,7 +141,7 @@ def test_required_queue_and_wait_scenarios():
         route_state="REDIRECT_B",
     )
     assert high_one_clear.queue_level == "HIGH"
-    assert high_one_clear.estimated_wait_label == "~5 min"
+    assert high_one_clear.estimated_wait_label in {"~10 min", "~15 min"}
 
     high_both_busy = estimate_once(
         main_risk=68,
@@ -155,7 +155,7 @@ def test_required_queue_and_wait_scenarios():
         route_state="BOTH_BUSY",
     )
     assert high_both_busy.queue_level in {"HIGH", "VERY HIGH"}
-    assert high_both_busy.estimated_wait_label in {"~8 min", "10+ min"}
+    assert high_both_busy.estimated_wait_label in {"~15 min", "~20 min", "25+ min"}
 
 
 def test_clearing_reduces_level_and_wait_gradually():
@@ -251,7 +251,7 @@ def test_queue_fields_reach_api_and_websocket(tmp_path):
     assert snapshot["queue_level"] in {"MODERATE", "HIGH"}
     assert snapshot["queue_trend"] in {"RISING", "STABLE"}
     assert isinstance(snapshot["estimated_wait"], float)
-    assert snapshot["estimated_wait_label"] in {"~3 min", "~5 min"}
+    assert snapshot["estimated_wait_label"] in {"~8 min", "~10 min", "~15 min"}
 
     with api.websocket_connect("/ws/live") as websocket:
         live = websocket.receive_json()

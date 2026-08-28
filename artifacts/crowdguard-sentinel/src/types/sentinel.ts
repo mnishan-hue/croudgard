@@ -104,6 +104,9 @@ export interface Sentinel {
   acknowledged_state:
     "NEUTRAL" | "REDIRECT_A" | "REDIRECT_B" | "BOTH_BUSY" | "RESET" | null;
   last_command_id: string | null;
+  last_command_wait_minutes: number | null;
+  last_command_wait_label: string | null;
+  last_command_recommended_exit_id: string | null;
   command_acknowledged: boolean;
   last_error: string | null;
   latency_ms: number | null;

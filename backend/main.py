@@ -454,7 +454,11 @@ def auto_control(request: AutoControlRequest):
     store.set_setting("automatic_control",str(request.enabled).lower())
     if request.enabled:
         snapshot = service.snapshot()
-        service.dispatch_decision(snapshot.decision, force=True, source="AUTO_MODE")
+        service.dispatch_decision(
+            snapshot.decision, force=True, source="AUTO_MODE",
+            estimated_wait=snapshot.estimated_wait,
+            estimated_wait_label=snapshot.estimated_wait_label,
+        )
         store.add_event(EventLog(category="HARDWARE", message="Automatic hardware control enabled"))
     else:
         store.add_event(EventLog(category="HARDWARE", severity="WARNING", message="Manual hardware control enabled"))
@@ -475,12 +479,19 @@ def manual_control(request: ManualControlRequest):
         state = "REDIRECT_A" if exit_id == "exit_a" else "REDIRECT_B" if exit_id == "exit_b" else state
     if state == "REDIRECT_A": exit_id = "exit_a"
     if state == "REDIRECT_B": exit_id = "exit_b"
+    if state == "BOTH_BUSY":
+        available = [
+            item for item in facility.exits
+            if item.enabled and item.status not in {"CLOSED", "RESTRICTED"}
+        ]
+        if available:
+            exit_id = min(available, key=lambda item: item.risk).id
     if state in {"REDIRECT_A", "REDIRECT_B"} and not any(x.id==exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits):
         raise HTTPException(422,"Recommended exit is not available")
     decision = Decision(
         action="RESET" if state == "RESET" else "CRITICAL" if state == "BOTH_BUSY" else "REDIRECT_TO_EXIT" if state in {"REDIRECT_A", "REDIRECT_B"} else "NORMAL",
         route_state="BOTH_BUSY" if state == "BOTH_BUSY" else state if state in {"NEUTRAL", "REDIRECT_A", "REDIRECT_B"} else "NEUTRAL",
-        recommended_exit_id=exit_id if state in {"REDIRECT_A", "REDIRECT_B"} else None,
+        recommended_exit_id=exit_id if state in {"REDIRECT_A", "REDIRECT_B", "BOTH_BUSY"} else None,
         reason="Manual operator command",
     )
     store.set_setting("automatic_control","false")

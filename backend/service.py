@@ -374,7 +374,11 @@ class CrowdGuardService:
         snapshot = self.snapshot()
         if snapshot.automatic_control and snapshot.exit_coverage_complete:
             try:
-                self.dispatch_decision(snapshot.decision)
+                self.dispatch_decision(
+                    snapshot.decision,
+                    estimated_wait=snapshot.estimated_wait,
+                    estimated_wait_label=snapshot.estimated_wait_label,
+                )
             except ConnectionError as exc:
                 self.store.add_event(EventLog(category="HARDWARE",severity="WARNING",message=str(exc)))
             snapshot = self.snapshot()
@@ -419,7 +423,12 @@ class CrowdGuardService:
         self.store.save_facility(facility)
         return status
 
-    def _send_hardware_state(self, facility, sentinel, state: str, source: str, force: bool = False) -> bool:
+    def _send_hardware_state(
+        self, facility, sentinel, state: str, source: str, force: bool = False,
+        estimated_wait: float | None = None,
+        estimated_wait_label: str | None = None,
+        recommended_exit_id: str | None = None,
+    ) -> bool:
         if sentinel.protocol == "CLOUD_POLL":
             if (
                 not force
@@ -427,9 +436,12 @@ class CrowdGuardService:
                 and not sentinel.command_acknowledged
             ):
                 return False
-            self._queue_cloud_state(sentinel, state, source)
+            self._queue_cloud_state(
+                sentinel, state, source, estimated_wait,
+                estimated_wait_label, recommended_exit_id,
+            )
             return True
-        command_key = state
+        command_key = f"{state}:{estimated_wait_label or ''}:{recommended_exit_id or ''}"
         already_applied = (
             sentinel.command_acknowledged
             and sentinel.acknowledged_state == state
@@ -440,7 +452,13 @@ class CrowdGuardService:
         command_id = str(uuid4())
         sentinel.command_acknowledged = False
         try:
-            self.hardware.set_state(sentinel, {"action": state, "command_id": command_id})
+            self.hardware.set_state(sentinel, {
+                "action": state,
+                "command_id": command_id,
+                "estimated_wait_minutes": estimated_wait,
+                "estimated_wait_label": estimated_wait_label,
+                "recommended_exit_id": recommended_exit_id,
+            })
         except Exception as exc:
             sentinel.connected = False
             sentinel.command_acknowledged = False
@@ -452,10 +470,18 @@ class CrowdGuardService:
         self.store.add_event(EventLog(category="HARDWARE", message=f"{sentinel.name} acknowledged {state} ({source.lower()})"))
         return True
 
-    def _queue_cloud_state(self, sentinel, state: str, source: str):
+    def _queue_cloud_state(
+        self, sentinel, state: str, source: str,
+        estimated_wait: float | None = None,
+        estimated_wait_label: str | None = None,
+        recommended_exit_id: str | None = None,
+    ):
         """Persist one command for delivery when the ESP32 next polls Render."""
         sentinel.last_command = state
         sentinel.last_command_id = str(uuid4())
+        sentinel.last_command_wait_minutes = estimated_wait
+        sentinel.last_command_wait_label = estimated_wait_label
+        sentinel.last_command_recommended_exit_id = recommended_exit_id
         sentinel.command_acknowledged = False
         sentinel.last_error = None
         self.last_dispatched_command.pop(sentinel.id, None)
@@ -536,6 +562,9 @@ class CrowdGuardService:
             "device_id": device_id,
             "state": sentinel.last_command,
             "command_id": sentinel.last_command_id,
+            "estimated_wait_minutes": sentinel.last_command_wait_minutes,
+            "estimated_wait_label": sentinel.last_command_wait_label,
+            "recommended_exit_id": sentinel.last_command_recommended_exit_id,
         }
 
     @synchronized
@@ -572,7 +601,12 @@ class CrowdGuardService:
         }
 
     @synchronized
-    def dispatch_decision(self, decision: Decision, sentinel_id: str | None = None, force: bool = False, source: str = "AI"):
+    def dispatch_decision(
+        self, decision: Decision, sentinel_id: str | None = None,
+        force: bool = False, source: str = "AI",
+        estimated_wait: float | None = None,
+        estimated_wait_label: str | None = None,
+    ):
         facility = self.facility
         targets = [item for item in facility.sentinels if sentinel_id is None or item.id == sentinel_id]
         if not targets:
@@ -580,17 +614,30 @@ class CrowdGuardService:
         state = canonical_hardware_state(decision.action, decision.recommended_exit_id, decision.route_state)
         for sentinel in targets:
             desired_changed = sentinel.desired_state != state
+            guidance_changed = (
+                sentinel.last_command_wait_label != estimated_wait_label
+                or sentinel.last_command_recommended_exit_id
+                != decision.recommended_exit_id
+            )
             sentinel.desired_state = state
             if sentinel.protocol == "CLOUD_POLL":
-                if desired_changed or force or sentinel.last_command_id is None:
-                    self._queue_cloud_state(sentinel, state, source)
+                if desired_changed or guidance_changed or force or sentinel.last_command_id is None:
+                    self._queue_cloud_state(
+                        sentinel, state, source, estimated_wait,
+                        estimated_wait_label, decision.recommended_exit_id,
+                    )
                 continue
             if not sentinel.connected:
                 sentinel.command_acknowledged = False
                 if desired_changed:
                     self.store.add_event(EventLog(category="HARDWARE", severity="WARNING", message=f"{sentinel.name} is disconnected; preserving desired state {state}"))
                 continue
-            self._send_hardware_state(facility, sentinel, state, source, force=force)
+            self._send_hardware_state(
+                facility, sentinel, state, source, force=force,
+                estimated_wait=estimated_wait,
+                estimated_wait_label=estimated_wait_label,
+                recommended_exit_id=decision.recommended_exit_id,
+            )
         self.store.save_facility(facility)
         return facility
 
@@ -617,6 +664,8 @@ class CrowdGuardService:
             self.dispatch_decision(
                 snapshot.decision,
                 source="AUTO_RECOVERY",
+                estimated_wait=snapshot.estimated_wait,
+                estimated_wait_label=snapshot.estimated_wait_label,
             )
 
     @synchronized

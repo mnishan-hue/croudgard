@@ -32,6 +32,7 @@ const int SERVO_PIN = 13;
 const int SERVO_NEUTRAL_ANGLE = 90;
 const int SERVO_EXIT_A_ANGLE = 30;
 const int SERVO_EXIT_B_ANGLE = 150;
+const unsigned long SERVO_STEP_INTERVAL_MS = 18;
 const int DFPLAYER_RX = 16;
 const int DFPLAYER_TX = 17;
 
@@ -54,6 +55,11 @@ String audioState = "IDLE";
 String audioCommand = "NONE";
 String exitAState = "NEUTRAL";
 String exitBState = "NEUTRAL";
+String estimatedWaitLabel = "~5 min";
+String safestExitId = "";
+int currentServoAngle = SERVO_NEUTRAL_ANGLE;
+int targetServoAngle = SERVO_NEUTRAL_ANGLE;
+unsigned long lastServoStep = 0;
 unsigned long lastWifiAttempt = 0;
 unsigned long lastCloudPoll = 0;
 unsigned long lastCloudHeartbeat = 0;
@@ -86,7 +92,8 @@ void drawRouteCard(int x, int y, int width, const String& exitName,
   tft.print(status);
 }
 
-void showGuidanceScreen(const String& state) {
+void showGuidanceScreen(const String& state, const String& waitLabel,
+                        const String& recommendedExitId) {
   const uint16_t background = tft.color565(5, 12, 24);
   const uint16_t headerBackground = tft.color565(10, 28, 48);
   const uint16_t cardBackground = tft.color565(14, 24, 39);
@@ -123,7 +130,11 @@ void showGuidanceScreen(const String& state) {
     exitBColor = safe;
   } else if (state == "BOTH_BUSY") {
     title = "WALK SLOWLY";
-    subtitle = "BOTH EXITS ARE BUSY - STAY CALM";
+    subtitle = recommendedExitId == "exit_a"
+                   ? "SAFER ROUTE: EXIT A - STAY CALM"
+                   : recommendedExitId == "exit_b"
+                         ? "SAFER ROUTE: EXIT B - STAY CALM"
+                         : "BOTH EXITS ARE BUSY - STAY CALM";
     exitAStatus = "BUSY";
     exitBStatus = "BUSY";
     accent = caution;
@@ -147,7 +158,9 @@ void showGuidanceScreen(const String& state) {
   tft.fillRoundRect(18, 66, screenWidth - 36, 128, 14, cardBackground);
   tft.fillRoundRect(18, 66, 9, 128, 5, accent);
   drawCenteredText(title, 92, 4, TFT_WHITE, cardBackground);
-  drawCenteredText(subtitle, 151, 1, accent, cardBackground);
+  drawCenteredText(subtitle, 147, 1, accent, cardBackground);
+  drawCenteredText("EST. WAIT  " + waitLabel, 170, 2, caution,
+                   cardBackground);
 
   const int cardWidth = (screenWidth - 48) / 2;
   drawRouteCard(18, 210, cardWidth, "EXIT A", exitAStatus, exitAColor);
@@ -159,7 +172,9 @@ void showGuidanceScreen(const String& state) {
 }
 
 void logHardwareState(const String& requestedState,
-                      const String& previousState) {
+                      const String& previousState,
+                      const String& waitLabel,
+                      const String& recommendedExitId) {
   Serial.println();
   Serial.println("========== CROWDGUARD STATUS ==========");
   if (requestedState == "REDIRECT_A") {
@@ -173,7 +188,13 @@ void logHardwareState(const String& requestedState,
   } else if (requestedState == "BOTH_BUSY") {
     Serial.println("STATUS : BOTH EXITS BUSY");
     Serial.println("SCREEN : WALK SLOWLY");
-    Serial.println("ROUTE  : STAY CALM AND FOLLOW GUIDANCE");
+    if (recommendedExitId == "exit_a") {
+      Serial.println("ROUTE  : EXIT A IS SAFER - WALK SLOWLY");
+    } else if (recommendedExitId == "exit_b") {
+      Serial.println("ROUTE  : EXIT B IS SAFER - WALK SLOWLY");
+    } else {
+      Serial.println("ROUTE  : STAY CALM AND FOLLOW GUIDANCE");
+    }
   } else {
     if (requestedState == "RESET") {
       Serial.println("STATUS : RESET COMPLETE - SYSTEM NORMAL");
@@ -185,7 +206,22 @@ void logHardwareState(const String& requestedState,
     Serial.println("SCREEN : THANK YOU");
     Serial.println("ROUTE  : BOTH EXITS OPEN");
   }
+  Serial.print("WAIT   : ");
+  Serial.println(waitLabel);
   Serial.println("=======================================");
+}
+
+void setServoTarget(int angle) {
+  targetServoAngle = constrain(angle, SERVO_EXIT_A_ANGLE, SERVO_EXIT_B_ANGLE);
+}
+
+void updateServoMotion() {
+  const unsigned long now = millis();
+  if (currentServoAngle == targetServoAngle ||
+      now - lastServoStep < SERVO_STEP_INTERVAL_MS) return;
+  lastServoStep = now;
+  currentServoAngle += currentServoAngle < targetServoAngle ? 1 : -1;
+  guidanceServo.write(currentServoAngle);
 }
 
 void setLedSegment(int first, int count, uint32_t color) {
@@ -229,11 +265,11 @@ void initializeHardware() {
 
   guidanceServo.setPeriodHertz(50);
   guidanceServo.attach(SERVO_PIN, 500, 2400);
-  guidanceServo.write(SERVO_NEUTRAL_ANGLE);
+  guidanceServo.write(currentServoAngle);
 
   tft.init();
   tft.setRotation(1);
-  showGuidanceScreen("NEUTRAL");
+  showGuidanceScreen("NEUTRAL", estimatedWaitLabel, safestExitId);
 
   dfSerial.begin(9600, SERIAL_8N1, DFPLAYER_RX, DFPLAYER_TX);
   dfPlayerReady = dfPlayer.begin(dfSerial);
@@ -245,35 +281,52 @@ void initializeHardware() {
   }
 }
 
-void applyHardwareState(const String& state) {
+void applyHardwareState(const String& state, String waitLabel = "",
+                        String recommendedExitId = "") {
   const String previousState = currentState;
+  const bool routeChanged = state != previousState;
+  if (!waitLabel.length()) {
+    waitLabel = state == "NEUTRAL" || state == "RESET" ? "~5 min"
+               : state == "BOTH_BUSY" ? "~15 min" : "~10 min";
+  }
+  estimatedWaitLabel = waitLabel;
+  safestExitId = recommendedExitId;
   currentState = state;
   if (state == "REDIRECT_A" || state == "REDIRECT_B") {
     const bool useExitA = state == "REDIRECT_A";
     armState = state;
     displayMessage = useExitA ? "USE EXIT A" : "USE EXIT B";
-    audioCommand = useExitA ? "PLEASE_USE_EXIT_A" : "PLEASE_USE_EXIT_B";
-    audioState = "PLAYING";
     exitAState = useExitA ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
     exitBState = useExitA ? "RED_RESTRICTED" : "GREEN_GUIDANCE";
-    guidanceServo.write(useExitA ? SERVO_EXIT_A_ANGLE : SERVO_EXIT_B_ANGLE);
-    showGuidanceScreen(state);
+    setServoTarget(useExitA ? SERVO_EXIT_A_ANGLE : SERVO_EXIT_B_ANGLE);
+    showGuidanceScreen(state, estimatedWaitLabel, safestExitId);
     setRouteLeds(
         useExitA ? strip.Color(0, 255, 0) : strip.Color(255, 0, 0),
         useExitA ? strip.Color(255, 0, 0) : strip.Color(0, 255, 0));
-    playGuidanceTrack(useExitA ? 1 : 2);
+    if (routeChanged) {
+      audioCommand = useExitA ? "PLEASE_USE_EXIT_A" : "PLEASE_USE_EXIT_B";
+      playGuidanceTrack(useExitA ? 1 : 2);
+    }
     digitalWrite(LED_BUILTIN, HIGH);
   } else if (state == "BOTH_BUSY") {
-    armState = "NEUTRAL";
+    armState = recommendedExitId == "exit_a" ? "REDIRECT_A"
+               : recommendedExitId == "exit_b" ? "REDIRECT_B" : "NEUTRAL";
     displayMessage = "PLEASE WALK SLOWLY";
-    audioCommand = "PLEASE_WALK_SLOWLY";
-    audioState = "PLAYING";
     exitAState = "CAUTION";
     exitBState = "CAUTION";
-    guidanceServo.write(SERVO_NEUTRAL_ANGLE);
-    showGuidanceScreen(state);
+    if (recommendedExitId == "exit_a") {
+      setServoTarget(SERVO_EXIT_A_ANGLE);
+    } else if (recommendedExitId == "exit_b") {
+      setServoTarget(SERVO_EXIT_B_ANGLE);
+    } else {
+      setServoTarget(SERVO_NEUTRAL_ANGLE);
+    }
+    showGuidanceScreen(state, estimatedWaitLabel, safestExitId);
     setRouteLeds(strip.Color(255, 150, 0), strip.Color(255, 150, 0));
-    playGuidanceTrack(3);
+    if (routeChanged) {
+      audioCommand = "PLEASE_WALK_SLOWLY";
+      playGuidanceTrack(3);
+    }
     digitalWrite(LED_BUILTIN, HIGH);
   } else {
     armState = "NEUTRAL";
@@ -282,12 +335,12 @@ void applyHardwareState(const String& state) {
     audioState = "IDLE";
     exitAState = "NEUTRAL";
     exitBState = "NEUTRAL";
-    guidanceServo.write(SERVO_NEUTRAL_ANGLE);
-    showGuidanceScreen("NEUTRAL");
+    setServoTarget(SERVO_NEUTRAL_ANGLE);
+    showGuidanceScreen("NEUTRAL", estimatedWaitLabel, safestExitId);
     setRouteLeds(0, 0);
     digitalWrite(LED_BUILTIN, LOW);
   }
-  logHardwareState(state, previousState);
+  logHardwareState(state, previousState, estimatedWaitLabel, safestExitId);
 }
 
 void addHardwareState(JsonObject state) {
@@ -339,6 +392,8 @@ void handleCommand() {
 
   const String state = request["state"] | "";
   const String commandId = request["command_id"] | "";
+  const String waitLabel = request["estimated_wait_label"] | "";
+  const String recommendedExitId = request["recommended_exit_id"] | "";
   const bool valid =
       state == "NEUTRAL" || state == "REDIRECT_A" || state == "REDIRECT_B" ||
       state == "BOTH_BUSY" || state == "RESET";
@@ -349,7 +404,7 @@ void handleCommand() {
 
   // A retry carries the same ID. Acknowledge it without replaying servo/audio.
   if (commandId != lastCommandId) {
-    applyHardwareState(state);
+    applyHardwareState(state, waitLabel, recommendedExitId);
     lastCommandId = commandId;
   }
 
@@ -458,6 +513,8 @@ void pollCloudCommand() {
   const String commandType = command["type"] | "";
   const String state = command["state"] | "";
   const String commandId = command["command_id"] | "";
+  const String waitLabel = command["estimated_wait_label"] | "";
+  const String recommendedExitId = command["recommended_exit_id"] | "";
   if (commandDevice != DEVICE_ID || commandType != "SET_STATE" ||
       !validState(state) || commandId.length() == 0) {
     Serial.println("Rejected invalid cloud command");
@@ -466,7 +523,7 @@ void pollCloudCommand() {
 
   // A repeated poll or acknowledgement retry never replays servo/audio.
   if (commandId != lastCommandId) {
-    applyHardwareState(state);
+    applyHardwareState(state, waitLabel, recommendedExitId);
     lastCommandId = commandId;
     Serial.printf("Applied cloud state %s\n", state.c_str());
   }
@@ -523,6 +580,7 @@ void loop() {
   }
   server.handleClient();
   updateAudioStatus();
+  updateServoMotion();
   if (USE_CLOUD_RELAY && WiFi.status() == WL_CONNECTED) {
     const unsigned long now = millis();
     if (now - lastCloudHeartbeat >= CLOUD_HEARTBEAT_INTERVAL_MS) {

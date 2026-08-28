@@ -119,7 +119,10 @@ export default function Operations() {
         }
       />
 
-      <section className="mb-4 grid overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-[1.35fr_.95fr_.8fr_.8fr_.95fr] lg:gap-px">
+      <section
+        aria-live="polite"
+        className="live-surface mb-4 grid overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-[1.35fr_.95fr_.8fr_.8fr_.95fr] lg:gap-px"
+      >
         <div className="bg-card p-4">
           <div className="text-[9px] font-medium uppercase tracking-[.14em] text-muted-foreground">
             System decision
@@ -135,15 +138,17 @@ export default function Operations() {
               )}
             </span>
             <div>
-              <div className="text-lg font-semibold leading-tight">
+              <div className="live-value text-lg font-semibold leading-tight">
                 {monitoring
-                  ? decisionMessage(decision.route_state)
+                  ? `${decisionMessage(decision.route_state)} · ${snapshot.estimated_wait_label ?? "ANALYZING"}`
                   : "WAITING FOR CAMERAS"}
               </div>
               <div className="mt-1 text-[10px] text-muted-foreground">
                 {monitoring
                   ? recommendedExit
-                    ? `Recommended route: ${recommendedExit.name}`
+                    ? decision.route_state === "BOTH_BUSY"
+                      ? `Safer route: ${recommendedExit.name} · keep walking slowly`
+                      : `Recommended route: ${recommendedExit.name}`
                     : decision.route_state === "NEUTRAL"
                       ? "Both exits available"
                       : "No preferred exit"

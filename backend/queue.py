@@ -146,15 +146,17 @@ class MainAreaQueueEstimator:
 
     @staticmethod
     def _wait_label(minutes: float) -> str:
-        if minutes < 2:
-            return "<2 min"
-        if minutes < 4:
-            return "~3 min"
         if minutes < 6.5:
             return "~5 min"
-        if minutes < 9.5:
+        if minutes < 9:
             return "~8 min"
-        return "10+ min"
+        if minutes < 12.5:
+            return "~10 min"
+        if minutes < 17.5:
+            return "~15 min"
+        if minutes < 22.5:
+            return "~20 min"
+        return "25+ min"
 
     def _raw_wait(
         self,
@@ -165,7 +167,10 @@ class MainAreaQueueEstimator:
         exit_zones: dict[str, Zone],
         decision: Decision,
     ) -> float:
-        wait = {"LOW": 1.0, "MODERATE": 3.0, "HIGH": 5.0, "VERY HIGH": 8.0}[level]
+        # A calm, realistic baseline: even a normal crowd needs roughly five
+        # minutes to reach and clear the exits. Congestion then increases the
+        # estimate instead of starting from an unrealistically tiny value.
+        wait = {"LOW": 5.0, "MODERATE": 7.0, "HIGH": 10.0, "VERY HIGH": 14.0}[level]
         usable = [
             exit_
             for exit_ in exits
@@ -180,9 +185,9 @@ class MainAreaQueueEstimator:
             and any(exit_.risk >= 45 for exit_ in usable)
         )
         if both_busy:
-            wait += 3
+            wait += 5
         elif one_clear:
-            wait += 0.5
+            wait += 2
 
         measured_outflow = 0.0
         for exit_ in usable:
@@ -192,14 +197,14 @@ class MainAreaQueueEstimator:
         wait -= min(2.0, measured_outflow / 8)
 
         if trend == "RISING":
-            wait += 1
+            wait += 1.5
         elif trend == "FALLING":
             wait -= 1
             if decision.route_state in {"REDIRECT_A", "REDIRECT_B"}:
                 wait -= 0.5
         if "queue_growth" in main.metrics.available_metrics:
             wait += min(1.0, max(0, main.metrics.queue_growth) / 2)
-        return self._clamp(wait, 0.5, 12)
+        return self._clamp(wait, 3, 25)
 
     def estimate(
         self,

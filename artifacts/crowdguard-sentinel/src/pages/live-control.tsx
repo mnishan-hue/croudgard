@@ -85,7 +85,8 @@ export default function LiveControl() {
       : prediction.risk > previous
         ? "WORSENING"
         : "STABLE";
-  const critical = prediction.risk >= 90;
+  const critical =
+    prediction.risk >= 90 || decision.route_state === "BOTH_BUSY";
   const isLocalRunning = cameraStation.status === "RUNNING";
   const hasLiveAI = snapshot.camera_ai_active || isLocalRunning;
   const hasMainQueue = hasLiveAI && snapshot.queue_level !== null;
@@ -126,7 +127,8 @@ export default function LiveControl() {
       <BrowserCameraStation cameras={facility.cameras} />
       {hasLiveAI ? (
         <section
-          className={`mb-5 border p-4 ${critical ? "border-destructive/60 bg-destructive/10" : "border-primary/35 bg-primary/[.05]"}`}
+          aria-live="polite"
+          className={`live-surface mb-5 border p-4 ${critical ? "border-destructive/60 bg-destructive/10" : "border-primary/35 bg-primary/[.05]"}`}
         >
           <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
             <div className="flex gap-3">
@@ -138,16 +140,22 @@ export default function LiveControl() {
                 <div className="text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground">
                   Current situation
                 </div>
-                <h2 className="mt-1 text-[17px] font-semibold">
-                  {humanize(prediction.crowd_state)}
-                  {affected ? ` in ${affected.name}` : ""}
+                <h2 className="live-value mt-1 text-[17px] font-semibold">
+                  {decision.route_state === "BOTH_BUSY"
+                    ? "WALK SLOWLY · BOTH EXITS BUSY"
+                    : humanize(prediction.crowd_state)}
+                  {decision.route_state !== "BOTH_BUSY" && affected
+                    ? ` in ${affected.name}`
+                    : ""}
                 </h2>
                 <p className="mt-2 max-w-3xl text-[12px] leading-relaxed text-muted-foreground">
                   {decision.reason}
                 </p>
                 {recommended && (
                   <p className="mt-3 text-[13px] font-semibold text-secondary">
-                    Guide people toward {recommended.name}
+                    {decision.route_state === "BOTH_BUSY"
+                      ? `${recommended.name} is the safer available route — walk slowly`
+                      : `Guide people toward ${recommended.name}`}
                   </p>
                 )}
               </div>
@@ -181,12 +189,31 @@ export default function LiveControl() {
           </div>
         </section>
       )}
-      <section className="mb-5 border border-secondary/35 bg-secondary/[.04] p-4">
-        <div className="mb-3">
-          <div className="data-mono text-[9px] text-secondary">MAIN AREA</div>
-          <p className="mt-1 text-[10px] text-muted-foreground">
-            Estimated from current crowd and exit-flow conditions.
-          </p>
+      <section
+        key={`${snapshot.queue_level}-${snapshot.estimated_wait_label}-${decision.route_state}`}
+        aria-live="polite"
+        className={`live-surface mb-5 rounded-xl border p-4 ${decision.route_state === "BOTH_BUSY" ? "border-primary/55 bg-primary/[.07]" : "border-secondary/35 bg-secondary/[.04]"}`}
+      >
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="data-mono text-[9px] text-secondary">MAIN AREA</div>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Live estimate from crowd density, trend and exit flow.
+            </p>
+          </div>
+          <div className="text-right">
+            <div className="text-[9px] uppercase tracking-[.14em] text-muted-foreground">
+              Estimated clearance time
+            </div>
+            <div className="live-value mt-1 data-mono text-3xl font-semibold text-primary">
+              {hasMainQueue ? snapshot.estimated_wait_label : "—"}
+            </div>
+            {decision.route_state === "BOTH_BUSY" && (
+              <div className="mt-1 text-[10px] font-semibold text-primary">
+                WALK SLOWLY · FOLLOW THE SAFER ROUTE
+              </div>
+            )}
+          </div>
         </div>
         <div className="grid gap-px bg-border sm:grid-cols-3">
           <Brief

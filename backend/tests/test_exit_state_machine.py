@@ -72,8 +72,8 @@ def test_both_heavily_crowded_produces_slow_walking_message():
     decision = DecisionEngine().decide(*scenario(main=88, exit_a=76, exit_b=79))
     assert decision.action == "CRITICAL"
     assert decision.route_state == "BOTH_BUSY"
-    assert decision.recommended_exit_id is None
-    assert compute_hardware_state(decision.action, None).display_message == "PLEASE WALK SLOWLY"
+    assert decision.recommended_exit_id in {"exit_a", "exit_b"}
+    assert compute_hardware_state(decision.action, decision.recommended_exit_id).display_message == "PLEASE WALK SLOWLY"
 
 
 def test_minor_live_reversal_does_not_flip_the_route(monkeypatch):
@@ -170,5 +170,5 @@ def test_only_congested_usable_exit_uses_cautious_response():
     exits[1].status = "CLOSED"
     decision = DecisionEngine().decide(zones, exits)
     assert decision.action == "CRITICAL"
-    assert decision.recommended_exit_id is None
+    assert decision.recommended_exit_id == "exit_a"
     assert "only usable exit" in decision.reason.lower()

@@ -225,6 +225,43 @@ def test_monitor_preserves_manual_guidance_without_auto_mode(tmp_path, monkeypat
     assert sentinel(api)["desired_state"] == "REDIRECT_A"
 
 
+def test_cloud_command_delivers_wait_and_safest_exit_metadata(tmp_path, monkeypatch):
+    api, service = client(tmp_path, monkeypatch)
+    decision = Decision(
+        action="CRITICAL",
+        route_state="BOTH_BUSY",
+        recommended_exit_id="exit_a",
+        reason="Both exits are congested.",
+    )
+    service.dispatch_decision(
+        decision,
+        estimated_wait=16.2,
+        estimated_wait_label="~15 min",
+    )
+    command = api.get(
+        "/api/device/cg-cloud-test/command", headers=HEADERS
+    ).json()
+    assert command["state"] == "BOTH_BUSY"
+    assert command["estimated_wait_minutes"] == 16.2
+    assert command["estimated_wait_label"] == "~15 min"
+    assert command["recommended_exit_id"] == "exit_a"
+
+    command_id = command["command_id"]
+    service.dispatch_decision(
+        decision,
+        estimated_wait=16.8,
+        estimated_wait_label="~15 min",
+    )
+    assert sentinel(api)["last_command_id"] == command_id
+
+    service.dispatch_decision(
+        decision,
+        estimated_wait=19.1,
+        estimated_wait_label="~20 min",
+    )
+    assert sentinel(api)["last_command_id"] != command_id
+
+
 def test_cloud_relay_rejects_wrong_acknowledgement(tmp_path, monkeypatch):
     api, _ = client(tmp_path, monkeypatch)
     command = api.get(

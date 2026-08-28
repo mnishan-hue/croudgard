@@ -123,6 +123,9 @@ class Sentinel(BaseModel):
     desired_state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"] = "NEUTRAL"
     acknowledged_state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"] | None = None
     last_command_id: str | None = None
+    last_command_wait_minutes: float | None = None
+    last_command_wait_label: str | None = None
+    last_command_recommended_exit_id: str | None = None
     command_acknowledged: bool = False
     last_error: str | None = None
     latency_ms: float | None = None

@@ -246,6 +246,9 @@ class DecisionEngine:
             return Decision(
                 action="CRITICAL",
                 route_state=route_state,
+                # Both routes still require caution, but the first ranked exit
+                # is the least risky available option for the display/servo.
+                recommended_exit_id=ranking[0]["exit_id"],
                 affected_zone_id=affected_zone.id if affected_zone else None,
                 reason=reason,
                 exit_ranking=ranking,
