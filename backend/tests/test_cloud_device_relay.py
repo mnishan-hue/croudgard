@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from backend.models import Decision
+
 
 DEVICE_KEY = "test-device-key"
 HEADERS = {"X-CrowdGuard-Device-Key": DEVICE_KEY}
@@ -169,6 +171,58 @@ def test_cloud_relay_disconnect_preserves_state_and_reconnects(tmp_path, monkeyp
     ).json()
     assert current["state"] == "BOTH_BUSY"
     assert current["command_id"] == command_id
+
+
+def test_monitor_returns_stale_automatic_guidance_to_neutral(tmp_path, monkeypatch):
+    api, service = client(tmp_path, monkeypatch)
+    service.store.set_setting("automatic_control", "true")
+    service.dispatch_decision(
+        Decision(
+            action="REDIRECT_TO_EXIT",
+            route_state="REDIRECT_B",
+            recommended_exit_id="exit_b",
+            reason="Exit A is congested.",
+        )
+    )
+    redirected = sentinel(api)
+    redirect_command_id = redirected["last_command_id"]
+    assert redirected["desired_state"] == "REDIRECT_B"
+
+    # No fresh camera observation remains. The periodic monitor must synchronize
+    # the already-neutral snapshot decision back to the physical display.
+    service.poll_hardware()
+    recovered = sentinel(api)
+    assert recovered["desired_state"] == "NEUTRAL"
+    assert recovered["last_command"] == "NEUTRAL"
+    assert recovered["last_command_id"] != redirect_command_id
+
+    command = api.get(
+        "/api/device/cg-cloud-test/command",
+        headers=HEADERS,
+    ).json()
+    assert command["pending"] is True
+    assert command["state"] == "NEUTRAL"
+
+    # Repeated maintenance polls must not create duplicate recovery commands.
+    recovery_command_id = recovered["last_command_id"]
+    service.poll_hardware()
+    assert sentinel(api)["last_command_id"] == recovery_command_id
+
+
+def test_monitor_preserves_manual_guidance_without_auto_mode(tmp_path, monkeypatch):
+    api, service = client(tmp_path, monkeypatch)
+    service.store.set_setting("automatic_control", "false")
+    service.dispatch_decision(
+        Decision(
+            action="REDIRECT_TO_EXIT",
+            route_state="REDIRECT_A",
+            recommended_exit_id="exit_a",
+            reason="Manual route selection.",
+        )
+    )
+
+    service.poll_hardware()
+    assert sentinel(api)["desired_state"] == "REDIRECT_A"
 
 
 def test_cloud_relay_rejects_wrong_acknowledgement(tmp_path, monkeypatch):

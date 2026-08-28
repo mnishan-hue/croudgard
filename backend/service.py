@@ -594,9 +594,35 @@ class CrowdGuardService:
         self.store.save_facility(facility)
         return facility
 
+    def _synchronize_automatic_recovery(self) -> None:
+        """Return stale route guidance to neutral while automatic control is on.
+
+        Camera observations expire without invoking ``record_cv_observation``
+        again. In that case ``snapshot()`` correctly reports a NORMAL decision,
+        but there used to be no event that dispatched the matching NEUTRAL
+        command. The periodic hardware monitor closes that gap. It only sends a
+        recovery command, never a new redirect, so fresh camera observations
+        remain the sole source of automatic route changes.
+        """
+        if self.store.get_setting("automatic_control") != "true":
+            return
+        facility = self.facility
+        if facility is None or not any(
+            sentinel.desired_state != "NEUTRAL"
+            for sentinel in facility.sentinels
+        ):
+            return
+        snapshot = self.snapshot()
+        if snapshot.decision.action == "NORMAL":
+            self.dispatch_decision(
+                snapshot.decision,
+                source="AUTO_RECOVERY",
+            )
+
     @synchronized
     def poll_hardware(self):
         """Bounded connection maintenance; safe to call from a periodic background task."""
+        self._synchronize_automatic_recovery()
         facility = self.facility
         if facility is None:
             return
