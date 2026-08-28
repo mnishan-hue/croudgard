@@ -9,13 +9,13 @@
 - Exit guidance requires current observations for every enabled exit.
 - Live Control, Camera Analysis, AI Intelligence, Event Log, and the facility map consume the same backend snapshot.
 - Configuration is persisted separately from live measurements.
-- Hardware commands are rejected until a physical Sentinel reports as connected.
+- Hardware commands are preserved while a physical Sentinel is disconnected and delivered after it reports as connected.
 - API, data-quality, routing, expiry, CRUD, and production frontend behavior are covered by tests.
 
 ## Physical integration boundary
 
 - Each real camera or edge process must post observations using its configured camera ID.
-- The ESP32 HTTP transport, heartbeat validation, command acknowledgement, in-app setup flow, starter firmware, and local-network guide are implemented.
+- Local HTTP and authenticated Render cloud-relay transports, heartbeat validation, command acknowledgement, reconnect synchronization, in-app setup, and starter firmware are implemented.
 - The supplied firmware provides the protocol and a safe onboard-LED demonstration; project-specific servo, WS2812B, display, and DFPlayer pin mappings remain hardware-dependent.
-- Private ESP32 addresses require the FastAPI backend to run on the same local network; a cloud backend cannot route directly to a private LAN device.
+- Private ESP32 addresses still require a local backend. A Render deployment uses the outbound ESP32 cloud-relay mode instead.
 - Cross-camera person re-identification is not implemented; overlapping views use the strongest count instead of summing.

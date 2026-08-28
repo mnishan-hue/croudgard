@@ -16,3 +16,11 @@ services:
         value: ^https://[a-zA-Z0-9-]+\.vercel\.app$
       - key: CROWDGUARD_CORS_ORIGINS
         sync: false
+      - key: CROWDGUARD_DEVICE_API_KEY
+        sync: false
+      - key: CROWDGUARD_DEVICE_ID
+        value: crowdguard-sentinel-01
+      - key: CROWDGUARD_DEVICE_TRANSPORT
+        value: CLOUD_POLL
+      - key: CROWDGUARD_DEVICE_STALE_SECONDS
+        value: "20"

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from functools import wraps
 from threading import RLock
@@ -6,7 +7,7 @@ from uuid import uuid4
 from backend.ai.live import CameraAIProvider
 from backend.decision import DecisionEngine
 from backend.hardware.esp32_client import ESP32Client, canonical_hardware_state
-from backend.models import CrowdState, Decision, EventLog, Intervention, LiveSnapshot, RiskSample
+from backend.models import CrowdState, Decision, EventLog, Intervention, LiveSnapshot, RiskSample, utc_now
 from backend.queue import MainAreaQueueEstimator
 
 
@@ -385,6 +386,17 @@ class CrowdGuardService:
         sentinel = next((item for item in facility.sentinels if item.id == sentinel_id), None)
         if sentinel is None:
             raise ValueError("Sentinel does not exist")
+        if sentinel.protocol == "CLOUD_POLL":
+            if sentinel.connected and sentinel.last_heartbeat:
+                return {
+                    "device_id": sentinel.device_id,
+                    "status": "ready",
+                    "transport": "CLOUD_POLL",
+                    "last_heartbeat": sentinel.last_heartbeat,
+                }
+            raise ConnectionError(
+                "Cloud relay is waiting for the ESP32 to contact this backend"
+            )
         was_connected = sentinel.connected
         try:
             status = self.hardware.heartbeat(sentinel)
@@ -408,6 +420,15 @@ class CrowdGuardService:
         return status
 
     def _send_hardware_state(self, facility, sentinel, state: str, source: str, force: bool = False) -> bool:
+        if sentinel.protocol == "CLOUD_POLL":
+            if (
+                not force
+                and sentinel.last_command == state
+                and not sentinel.command_acknowledged
+            ):
+                return False
+            self._queue_cloud_state(sentinel, state, source)
+            return True
         command_key = state
         already_applied = (
             sentinel.command_acknowledged
@@ -431,6 +452,125 @@ class CrowdGuardService:
         self.store.add_event(EventLog(category="HARDWARE", message=f"{sentinel.name} acknowledged {state} ({source.lower()})"))
         return True
 
+    def _queue_cloud_state(self, sentinel, state: str, source: str):
+        """Persist one command for delivery when the ESP32 next polls Render."""
+        sentinel.last_command = state
+        sentinel.last_command_id = str(uuid4())
+        sentinel.command_acknowledged = False
+        sentinel.last_error = None
+        self.last_dispatched_command.pop(sentinel.id, None)
+        self.store.add_event(
+            EventLog(
+                category="HARDWARE",
+                message=f"{sentinel.name} queued {state} for cloud relay ({source.lower()})",
+            )
+        )
+
+    def _device_sentinel(self, device_id: str):
+        facility = self.facility
+        sentinel = next(
+            (item for item in facility.sentinels if item.device_id == device_id), None
+        )
+        if sentinel is None:
+            raise ValueError("Device ID is not configured")
+        if sentinel.protocol != "CLOUD_POLL":
+            raise ValueError("Device is not configured for cloud relay")
+        return facility, sentinel
+
+    @synchronized
+    def device_heartbeat(self, device_id: str, report):
+        facility, sentinel = self._device_sentinel(device_id)
+        was_connected = sentinel.connected
+        sentinel.connected = True
+        sentinel.last_heartbeat = utc_now()
+        sentinel.last_error = None
+        if report.hardware_state is not None:
+            sentinel.hardware_state = report.hardware_state
+        if (
+            report.last_command_id
+            and report.last_command_id == sentinel.last_command_id
+            and report.state == sentinel.desired_state
+        ):
+            sentinel.last_command = report.state
+            sentinel.acknowledged_state = report.state
+            sentinel.command_acknowledged = True
+            self.last_dispatched_command[sentinel.id] = report.state
+        if not was_connected:
+            self.store.add_event(
+                EventLog(category="HARDWARE", message=f"{sentinel.name} connected through cloud relay")
+            )
+        self.store.save_facility(facility)
+        return {
+            "connected": True,
+            "device_id": device_id,
+            "desired_state": sentinel.desired_state,
+            "command_pending": not sentinel.command_acknowledged,
+        }
+
+    @synchronized
+    def device_command(self, device_id: str, device_last_command_id: str | None):
+        facility, sentinel = self._device_sentinel(device_id)
+        was_connected = sentinel.connected
+        sentinel.connected = True
+        sentinel.last_heartbeat = utc_now()
+        sentinel.last_error = None
+        if not was_connected:
+            self.store.add_event(
+                EventLog(
+                    category="HARDWARE",
+                    message=f"{sentinel.name} connected through cloud relay",
+                )
+            )
+        if sentinel.last_command_id is None or sentinel.last_command != sentinel.desired_state:
+            self._queue_cloud_state(sentinel, sentinel.desired_state, "CONNECT")
+        pending = (
+            not sentinel.command_acknowledged
+            or device_last_command_id != sentinel.last_command_id
+        )
+        self.store.save_facility(facility)
+        if not pending:
+            return {"pending": False, "device_id": device_id}
+        return {
+            "pending": True,
+            "type": "SET_STATE",
+            "device_id": device_id,
+            "state": sentinel.last_command,
+            "command_id": sentinel.last_command_id,
+        }
+
+    @synchronized
+    def device_acknowledgement(self, device_id: str, acknowledgement):
+        facility, sentinel = self._device_sentinel(device_id)
+        if acknowledgement.acknowledged is not True:
+            raise ValueError("Device did not acknowledge the command")
+        if acknowledgement.command_id != sentinel.last_command_id:
+            raise ValueError("Acknowledgement command ID does not match")
+        if acknowledgement.state != sentinel.last_command:
+            raise ValueError("Acknowledgement state does not match")
+        first_ack = not sentinel.command_acknowledged
+        sentinel.connected = True
+        sentinel.last_heartbeat = utc_now()
+        sentinel.acknowledged_state = acknowledgement.state
+        sentinel.command_acknowledged = True
+        sentinel.last_error = None
+        if acknowledgement.hardware_state is not None:
+            sentinel.hardware_state = acknowledgement.hardware_state
+        self.last_dispatched_command[sentinel.id] = acknowledgement.state
+        if first_ack:
+            self.store.add_event(
+                EventLog(
+                    category="HARDWARE",
+                    message=f"{sentinel.name} acknowledged {acknowledgement.state} (cloud relay)",
+                )
+            )
+        self.store.save_facility(facility)
+        return {
+            "acknowledged": True,
+            "device_id": device_id,
+            "state": acknowledgement.state,
+            "command_id": acknowledgement.command_id,
+        }
+
     @synchronized
     def dispatch_decision(self, decision: Decision, sentinel_id: str | None = None, force: bool = False, source: str = "AI"):
         facility = self.facility
@@ -441,6 +581,10 @@ class CrowdGuardService:
         for sentinel in targets:
             desired_changed = sentinel.desired_state != state
             sentinel.desired_state = state
+            if sentinel.protocol == "CLOUD_POLL":
+                if desired_changed or force or sentinel.last_command_id is None:
+                    self._queue_cloud_state(sentinel, state, source)
+                continue
             if not sentinel.connected:
                 sentinel.command_acknowledged = False
                 if desired_changed:
@@ -450,12 +594,37 @@ class CrowdGuardService:
         self.store.save_facility(facility)
         return facility
 
+    @synchronized
     def poll_hardware(self):
         """Bounded connection maintenance; safe to call from a periodic background task."""
         facility = self.facility
         if facility is None:
             return
         for sentinel in facility.sentinels:
+            if sentinel.protocol == "CLOUD_POLL":
+                try:
+                    configured_timeout = float(
+                        os.getenv("CROWDGUARD_DEVICE_STALE_SECONDS", "20")
+                    )
+                except ValueError:
+                    configured_timeout = 20.0
+                timeout = max(10.0, configured_timeout)
+                if sentinel.last_heartbeat:
+                    last_seen = self._captured_at(sentinel.last_heartbeat)
+                    age = (datetime.now(timezone.utc) - last_seen).total_seconds()
+                    if age > timeout and sentinel.connected:
+                        sentinel.connected = False
+                        sentinel.command_acknowledged = False
+                        sentinel.last_error = "Cloud device heartbeat timed out"
+                        self.store.add_event(
+                            EventLog(
+                                category="HARDWARE",
+                                severity="WARNING",
+                                message=f"{sentinel.name} cloud relay disconnected",
+                            )
+                        )
+                        self.store.save_facility(facility)
+                continue
             if not sentinel.ip_address:
                 continue
             try:

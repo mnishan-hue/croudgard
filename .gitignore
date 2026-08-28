@@ -39,6 +39,7 @@ backend/*.db-wal
 .env.*
 !.env.example
 cameras.local.json
+/firmware/crowdguard_esp32/secrets.h
 /.sass-cache
 /connect.lock
 /coverage

@@ -91,9 +91,12 @@ Deploy the backend first so its public URL is available to the Vercel build.
 The root `Dockerfile` is backend-only and `render.yaml` defines the service.
 
 1. In Render, select **New → Blueprint** and connect this repository.
-2. Deploy the detected `crowdguard-sentinel` service.
-3. Verify `https://YOUR-SERVICE.onrender.com/api/health` returns `ONLINE`.
-4. Record the exact Render URL. Render supports the FastAPI `/ws/live` WebSocket on the same service.
+2. Set `CROWDGUARD_DEVICE_API_KEY` to a long random secret. The Blueprint supplies `CROWDGUARD_DEVICE_ID=crowdguard-sentinel-01` and `CROWDGUARD_DEVICE_TRANSPORT=CLOUD_POLL`; change the ID if your firmware uses another value.
+3. Deploy the detected `crowdguard-sentinel` service.
+4. Verify `https://YOUR-SERVICE.onrender.com/api/health` returns `ONLINE`.
+5. Record the exact Render URL. Render supports the FastAPI `/ws/live` WebSocket on the same service.
+
+Render cannot connect directly to an ESP32 private IP. Configure the same Render URL, device ID, and device API key in the supplied firmware so the ESP32 initiates the authenticated HTTPS heartbeat/command/ack flow. See [ESP32 quick start](docs/ESP32_QUICKSTART.md).
 
 The free plan stores SQLite at `/tmp/crowdguard.db`, so configuration and events reset after a service restart. For persistence, use a paid service, attach a disk at `/var/data`, and set `CROWDGUARD_DB_PATH=/var/data/crowdguard.db`.
 
@@ -105,7 +108,7 @@ The root `vercel.json` builds only `artifacts/crowdguard-sentinel` and provides 
 2. Add these Vercel variables for Production, Preview, and Development:
 
    - `VITE_API_BASE_URL=https://YOUR-SERVICE.onrender.com/api`
-   - `VITE_WS_URL=wss://YOUR-SERVICE.onrender.com/ws/live`
+   - `VITE_WS_URL=wss://YOUR-SERVICE.onrender.com/ws/live` (optional; automatically derived from the API URL)
 
 3. Deploy. The build intentionally fails with a clear message if either backend URL is absent.
 4. If using a custom Vercel domain, set `CROWDGUARD_CORS_ORIGINS=https://your-domain.example` on Render and redeploy the backend. Standard `*.vercel.app` production and preview URLs are accepted by the configured origin regex.

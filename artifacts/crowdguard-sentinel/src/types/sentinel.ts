@@ -95,7 +95,7 @@ export interface Sentinel {
   nearby_exit_ids: string[];
   device_id: string;
   ip_address: string;
-  protocol: "HTTP";
+  protocol: "HTTP" | "CLOUD_POLL";
   connected: boolean;
   last_heartbeat: string | null;
   last_command: string | null;

@@ -13,6 +13,7 @@ import {
 import { PageIntro, Panel } from "@/components/sentinel-shell";
 import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
+import { serviceConfig } from "@/services/config";
 import type { BackendSnapshot, Sentinel } from "@/types/sentinel";
 
 type Pending = {
@@ -26,6 +27,7 @@ export default function Devices() {
   const sentinel = facility?.sentinels[0];
   const [deviceId, setDeviceId] = useState("");
   const [address, setAddress] = useState("");
+  const [transport, setTransport] = useState<Sentinel["protocol"]>("HTTP");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(
@@ -38,13 +40,22 @@ export default function Devices() {
       sentinel?.device_id === "unconfigured" ? "" : (sentinel?.device_id ?? ""),
     );
     setAddress(sentinel?.ip_address ?? "");
-  }, [sentinel?.id, sentinel?.device_id, sentinel?.ip_address]);
+    setTransport(sentinel?.protocol ?? "HTTP");
+  }, [
+    sentinel?.id,
+    sentinel?.device_id,
+    sentinel?.ip_address,
+    sentinel?.protocol,
+  ]);
 
   async function saveConnection(showSuccess = true) {
     if (!sentinel) return false;
-    if (!deviceId.trim() || !address.trim()) {
+    if (!deviceId.trim() || (transport === "HTTP" && !address.trim())) {
       setMessage({
-        text: "Enter both the ESP32 device ID and network address.",
+        text:
+          transport === "HTTP"
+            ? "Enter both the ESP32 device ID and network address."
+            : "Enter the ESP32 device ID.",
         ok: false,
       });
       return false;
@@ -55,7 +66,8 @@ export default function Devices() {
         method: "PATCH",
         body: JSON.stringify({
           device_id: deviceId.trim(),
-          ip_address: address.trim(),
+          protocol: transport,
+          ip_address: transport === "HTTP" ? address.trim() : "",
           connected: false,
           command_acknowledged: false,
         }),
@@ -85,6 +97,14 @@ export default function Devices() {
     try {
       const saved = await saveConnection(false);
       if (!saved) return;
+      if (transport === "CLOUD_POLL") {
+        setMessage({
+          text: "Cloud relay saved. Flash the matching backend URL, device ID and device key, then wait for the ESP32 heartbeat.",
+          ok: true,
+        });
+        await refresh();
+        return;
+      }
       await apiFetch(`/hardware/${sentinel.id}/heartbeat`, { method: "POST" });
       setMessage({
         text: "ESP32 responded correctly. CrowdGuard is ready to send guidance.",
@@ -133,8 +153,8 @@ export default function Devices() {
     <div className="enter-rise">
       <PageIntro
         eyebrow="Devices"
-        title="Connect the ESP32 without guesswork"
-        description="Configure one local network address, test the heartbeat, then verify the guidance outputs."
+        title="Connect the ESP32 reliably"
+        description="Use cloud relay with Render, or direct HTTP when the backend and ESP32 share a local network."
         action={
           <span
             className={`rounded-full px-3 py-1.5 text-[10px] font-medium ${sentinel?.connected ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
@@ -202,19 +222,45 @@ export default function Devices() {
 
                 <label className="mt-4 block">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Network address
+                    Connection method
                   </span>
-                  <input
+                  <select
                     className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-3 text-sm outline-none focus:border-primary"
-                    value={address}
-                    onChange={(event) => setAddress(event.target.value)}
-                    placeholder="192.168.1.80 or crowdguard-esp32.local"
-                    autoComplete="off"
-                  />
-                  <span className="mt-1.5 block text-[10px] text-muted-foreground">
-                    HTTP is added automatically when omitted.
-                  </span>
+                    value={transport}
+                    onChange={(event) =>
+                      setTransport(event.target.value as Sentinel["protocol"])
+                    }
+                  >
+                    <option value="CLOUD_POLL">Render cloud relay</option>
+                    <option value="HTTP">Local LAN (direct HTTP)</option>
+                  </select>
                 </label>
+
+                {transport === "HTTP" ? (
+                  <label className="mt-4 block">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                      Network address
+                    </span>
+                    <input
+                      className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-3 text-sm outline-none focus:border-primary"
+                      value={address}
+                      onChange={(event) => setAddress(event.target.value)}
+                      placeholder="192.168.1.80 or crowdguard-esp32.local"
+                      autoComplete="off"
+                    />
+                    <span className="mt-1.5 block text-[10px] text-muted-foreground">
+                      HTTP is added automatically when omitted.
+                    </span>
+                  </label>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-secondary/30 bg-secondary/5 p-3 text-[10px] leading-relaxed text-muted-foreground">
+                    The ESP32 will make outbound HTTPS requests to{" "}
+                    <strong className="text-foreground">
+                      {serviceConfig.backendOrigin}
+                    </strong>
+                    . Do not enter its private IP address in Render.
+                  </div>
+                )}
 
                 <div className="mt-5 flex flex-wrap gap-2">
                   <button
@@ -256,22 +302,21 @@ export default function Devices() {
               className="rounded-xl"
             >
               <div className="space-y-4 p-5">
-                <GuideStep number="1" title="Run CrowdGuard locally">
-                  The FastAPI backend and ESP32 must be on the same Wi-Fi or
-                  LAN. A Render cloud server cannot reach a private 192.168.x.x
-                  device.
+                <GuideStep number="1" title="Choose the connection method">
+                  Use Render cloud relay for the deployed backend. Use local LAN
+                  only when FastAPI and the ESP32 are on the same network.
                 </GuideStep>
                 <GuideStep number="2" title="Flash the supplied firmware">
-                  Set Wi-Fi name, password and DEVICE_ID in the ESP32 sketch,
-                  then upload it using Arduino IDE.
+                  Set Wi-Fi, DEVICE_ID, Render backend URL and the matching
+                  device API key in the ESP32 sketch.
                 </GuideStep>
-                <GuideStep number="3" title="Find the address">
-                  Open Arduino Serial Monitor at 115200 baud. Copy the printed
-                  IP address into the field on this page.
+                <GuideStep number="3" title="Configure Render">
+                  Add the same device ID and secret key as Render environment
+                  variables, then redeploy the backend.
                 </GuideStep>
-                <GuideStep number="4" title="Save and test">
-                  CrowdGuard calls GET /status. The returned device_id must
-                  match before commands are enabled.
+                <GuideStep number="4" title="Verify the heartbeat">
+                  Save cloud relay here and power the ESP32. Connected appears
+                  after its first authenticated outbound heartbeat.
                 </GuideStep>
 
                 <details className="rounded-lg border border-border bg-background">
@@ -309,12 +354,17 @@ export default function Devices() {
                 label="Connection"
                 value={sentinel.connected ? "Connected" : "Offline"}
               />
+              <State label="Transport" value={sentinel.protocol} />
               <State
-                label="Latency"
+                label={sentinel.protocol === "HTTP" ? "Latency" : "Last seen"}
                 value={
-                  sentinel.latency_ms === null
-                    ? "Unavailable"
-                    : `${sentinel.latency_ms} ms`
+                  sentinel.protocol === "HTTP"
+                    ? sentinel.latency_ms === null
+                      ? "Unavailable"
+                      : `${sentinel.latency_ms} ms`
+                    : sentinel.last_heartbeat
+                      ? new Date(sentinel.last_heartbeat).toLocaleTimeString()
+                      : "Never"
                 }
               />
               <State

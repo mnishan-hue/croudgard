@@ -1,43 +1,62 @@
-# ESP32 HTTP protocol
+# ESP32 protocol
 
-The frontend never addresses the ESP32. FastAPI is the only command sender.
+The frontend never controls the ESP32 directly. Both supported transports keep
+the architecture **Decision Engine → FastAPI backend → ESP32 → hardware**.
 
-Configure each Sentinel with a unique `device_id` and `ip_address`, then press **Test connection** on the Hardware page.
+## Render cloud relay
 
-## Heartbeat
+The ESP32 authenticates every request with:
 
-`GET /status`
-
-```json
-{"device_id":"cg-sentinel-01","status":"ready"}
+```http
+X-CrowdGuard-Device-Key: <CROWDGUARD_DEVICE_API_KEY>
 ```
 
-The returned device ID must match configuration.
+### Heartbeat
 
-## Command
-
-`POST /command`
+`POST /api/device/{device_id}/heartbeat`
 
 ```json
-{"type":"SET_STATE","device_id":"cg-sentinel-01","state":"REDIRECT_B","command_id":"550e8400-e29b-41d4-a716-446655440000"}
+{"state":"NEUTRAL","last_command_id":null,"uptime_ms":12000,"hardware_state":{"arm_state":"NEUTRAL","display_message":"THANK YOU","audio":"NONE","audio_state":"IDLE","led_routes":{"exit_a":"NEUTRAL","exit_b":"NEUTRAL"}}}
 ```
 
-Acknowledgement:
+### Fetch current command
+
+`GET /api/device/{device_id}/command?last_command_id={last_command_id}`
 
 ```json
-{"acknowledged":true,"device_id":"cg-sentinel-01","state":"REDIRECT_B","command_id":"550e8400-e29b-41d4-a716-446655440000","hardware_state":{"arm_state":"REDIRECT_B","display_message":"USE EXIT B","audio":"PLEASE_USE_EXIT_B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}}
+{"pending":true,"type":"SET_STATE","device_id":"crowdguard-sentinel-01","state":"REDIRECT_B","command_id":"550e8400-e29b-41d4-a716-446655440000"}
 ```
 
-States are `NEUTRAL`, `REDIRECT_A`, `REDIRECT_B`, `BOTH_BUSY`, and `RESET`. Every logical command has a unique `command_id`. A retry reuses the same ID, so firmware acknowledges it without replaying movement or audio.
+When the device already has the acknowledged command, the backend returns
+`{"pending":false,...}`. The backend creates a command only on a state change,
+a manual command, reconnect synchronization, or a controlled retry.
 
-Recommended physical behavior:
+### Acknowledge
 
-- `REDIRECT_A`: discourage Exit B, Exit A green, Exit B red, display `USE EXIT A`, play “Please use Exit A” once.
-- `REDIRECT_B`: discourage Exit A, Exit A red, Exit B green, display `USE EXIT B`, play “Please use Exit B” once.
-- `NEUTRAL`: neutral arm and routes, display `THANK YOU`, no audio.
-- `BOTH_BUSY`: neutral arm, both routes caution, display `PLEASE WALK SLOWLY`, play “Please walk slowly” once.
-- `RESET`: safely apply the neutral baseline while remaining a distinct acknowledged command state.
+`POST /api/device/{device_id}/ack`
 
-FastAPI requires matching `acknowledged`, `device_id`, `state`, and `command_id` fields. It retries a failed logical command at most twice by default, with the same ID. It preserves the desired state while disconnected and sends that state once after a successful reconnect heartbeat.
+```json
+{"acknowledged":true,"state":"REDIRECT_B","command_id":"550e8400-e29b-41d4-a716-446655440000","hardware_state":{"arm_state":"REDIRECT_B","display_message":"USE EXIT B","audio":"PLEASE_USE_EXIT_B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}}
+```
 
-Manual controls switch the backend to Manual mode and cannot be overwritten by AI. Automatic mode may remain enabled while hardware is unavailable; camera AI continues and the latest desired state is synchronized after reconnect.
+Command IDs make delivery idempotent: the firmware may retry an acknowledgement
+without replaying servo movement, LEDs or audio. FastAPI preserves the desired
+state while the device is offline and marks it disconnected after the configured
+heartbeat timeout.
+
+## Local LAN HTTP
+
+FastAPI calls the ESP32 directly. `GET /status` returns the device ID and state;
+`POST /command` receives the same `SET_STATE` command shown above and returns
+the acknowledgement object. This mode requires both devices on the same LAN.
+
+## State contract
+
+- `NEUTRAL`: neutral arm/routes, TFT `THANK YOU`, no audio.
+- `REDIRECT_A`: Exit A green, Exit B red, TFT `USE EXIT A`, audio once.
+- `REDIRECT_B`: Exit A red, Exit B green, TFT `USE EXIT B`, audio once.
+- `BOTH_BUSY`: neutral arm, both exits caution, TFT `PLEASE WALK SLOWLY`, audio once.
+- `RESET`: safely apply the neutral baseline as a distinct acknowledged command.
+
+Manual controls disable automatic control until Auto mode is restored. Missing
+hardware never stops camera analysis or the decision engine.

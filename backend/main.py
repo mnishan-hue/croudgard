@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, DemoVideoControlRequest, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
+from backend.models import AutoControlRequest, Camera, ComputerVisionObservation, CrowdClassificationObservation, Decision, DemoVideoControlRequest, DeviceAcknowledgementRequest, DeviceHeartbeatRequest, EventLog, Exit, Facility, Junction, ManualControlRequest, PersonCountObservation, Sentinel, Zone, utc_now
 from backend.service import CrowdGuardService
 from backend.store import SQLiteStore
 
@@ -58,7 +59,14 @@ app.add_middleware(
 def health():
     facility=service.facility
     connected = bool(facility and any(item.connected for item in facility.sentinels))
-    configured = bool(facility and any(item.ip_address for item in facility.sentinels))
+    configured = bool(
+        facility
+        and any(
+            item.ip_address
+            or (item.protocol == "CLOUD_POLL" and item.device_id != "unconfigured")
+            for item in facility.sentinels
+        )
+    )
     hardware_status = "CONNECTED" if connected else "DISCONNECTED" if configured else "NOT CONFIGURED"
     return {"status": "ONLINE", "database": "ONLINE" if facility else "ERROR", "active_facility": facility.id if facility else None, "ai": service.ai.get_health(), "mode": "LIVE CAMERA", "sentinel_hardware": hardware_status}
 
@@ -333,6 +341,53 @@ def hardware_heartbeat(sentinel_id: str):
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(503, f"Sentinel heartbeat failed: {exc}") from exc
+
+
+def verify_device_key(value: str | None):
+    expected = os.getenv("CROWDGUARD_DEVICE_API_KEY", "")
+    if not expected:
+        raise HTTPException(503, "Cloud device relay is not configured")
+    if not value or not hmac.compare_digest(value, expected):
+        raise HTTPException(401, "Invalid device key")
+
+
+@app.post("/api/device/{device_id}/heartbeat")
+def device_heartbeat(
+    device_id: str,
+    report: DeviceHeartbeatRequest,
+    x_crowdguard_device_key: str | None = Header(default=None),
+):
+    verify_device_key(x_crowdguard_device_key)
+    try:
+        return service.device_heartbeat(device_id, report)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/device/{device_id}/command")
+def device_command(
+    device_id: str,
+    last_command_id: str | None = None,
+    x_crowdguard_device_key: str | None = Header(default=None),
+):
+    verify_device_key(x_crowdguard_device_key)
+    try:
+        return service.device_command(device_id, last_command_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/device/{device_id}/ack")
+def device_acknowledgement(
+    device_id: str,
+    acknowledgement: DeviceAcknowledgementRequest,
+    x_crowdguard_device_key: str | None = Header(default=None),
+):
+    verify_device_key(x_crowdguard_device_key)
+    try:
+        return service.device_acknowledgement(device_id, acknowledgement)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/junctions", status_code=201)

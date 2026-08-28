@@ -52,7 +52,10 @@ export default function Operations() {
     (sentinel) => sentinel.connected,
   ).length;
   const hardwareConfigured = facility.sentinels.some(
-    (sentinel) => sentinel.ip_address,
+    (sentinel) =>
+      Boolean(sentinel.ip_address) ||
+      (sentinel.protocol === "CLOUD_POLL" &&
+        sentinel.device_id !== "unconfigured"),
   );
   const monitoring = snapshot.camera_ai_active || isLocalRunning;
   const enabledExits = facility.exits.filter((exit) => exit.enabled);

@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 from threading import RLock
@@ -23,6 +24,26 @@ class SQLiteStore:
         if self.get_setting("active_facility") is None: self.set_setting("active_facility", "competition_prototype")
         if self.get_setting("automatic_control") is None: self.set_setting("automatic_control", "false")
         self._remove_legacy_operational_data()
+        self._apply_device_environment()
+
+    def _apply_device_environment(self):
+        """Restore Render device configuration when the ephemeral DB is recreated."""
+        device_id = os.getenv("CROWDGUARD_DEVICE_ID", "").strip()
+        if not device_id:
+            return
+        transport = os.getenv("CROWDGUARD_DEVICE_TRANSPORT", "CLOUD_POLL").strip().upper()
+        if transport not in {"HTTP", "CLOUD_POLL"}:
+            transport = "CLOUD_POLL"
+        facility = self.get_facility(self.get_setting("active_facility"))
+        if not facility or not facility.sentinels:
+            return
+        sentinel = facility.sentinels[0]
+        sentinel.device_id = device_id
+        sentinel.protocol = transport
+        sentinel.ip_address = os.getenv("CROWDGUARD_DEVICE_ADDRESS", "").strip()
+        sentinel.connected = False
+        sentinel.command_acknowledged = False
+        self.save_facility(facility)
 
     def _remove_legacy_operational_data(self):
         """Keep topology/configuration while removing persisted synthetic measurements."""

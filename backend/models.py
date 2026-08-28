@@ -116,7 +116,7 @@ class Sentinel(BaseModel):
     nearby_exit_ids: list[str] = Field(default_factory=list)
     device_id: str
     ip_address: str = ""
-    protocol: Literal["HTTP"] = "HTTP"
+    protocol: Literal["HTTP", "CLOUD_POLL"] = "HTTP"
     connected: bool = False
     last_heartbeat: str | None = None
     last_command: str | None = None
@@ -266,3 +266,17 @@ class DemoVideoControlRequest(BaseModel):
 
 class AutoControlRequest(BaseModel):
     enabled: bool
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"] = "NEUTRAL"
+    last_command_id: str | None = None
+    uptime_ms: int | None = Field(default=None, ge=0)
+    hardware_state: HardwareState | None = None
+
+
+class DeviceAcknowledgementRequest(BaseModel):
+    acknowledged: bool = True
+    state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"]
+    command_id: str
+    hardware_state: HardwareState | None = None
