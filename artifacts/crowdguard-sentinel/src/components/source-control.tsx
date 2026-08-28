@@ -52,11 +52,11 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
 
   return (
     <>
-      <section className="mb-5 overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <section className="mb-4 overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <span
-              className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${running ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${running ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
             >
               {running ? <Gauge size={19} /> : <Camera size={19} />}
             </span>

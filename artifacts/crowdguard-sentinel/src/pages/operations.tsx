@@ -2,12 +2,10 @@ import { useState } from "react";
 import { Link } from "wouter";
 import {
   ArrowRight,
-  Camera,
   CheckCircle2,
   Cpu,
   ShieldAlert,
   Sparkles,
-  TrendingUp,
 } from "lucide-react";
 import { LiveCameraGrid } from "@/components/live-camera-grid";
 import { MapPanel, PageIntro, Panel } from "@/components/sentinel-shell";
@@ -57,6 +55,28 @@ export default function Operations() {
     (sentinel) => sentinel.ip_address,
   );
   const monitoring = snapshot.camera_ai_active || isLocalRunning;
+  const enabledExits = facility.exits.filter((exit) => exit.enabled);
+
+  const exitSummary = enabledExits.map((exit) => {
+    const zone = facility.zones.find((item) => item.id === exit.zone_id);
+    const reporting =
+      zone?.camera_ids.some(
+        (cameraId) =>
+          snapshot.reporting_camera_ids.includes(cameraId) ||
+          Boolean(
+            cameraStation.metrics[cameraId] &&
+            !cameraStation.metrics[cameraId].isWarmingUp,
+          ),
+      ) ?? false;
+    return {
+      exit,
+      level: reporting ? crowdLevel(exit.risk) : "WAITING",
+      trend:
+        reporting && zone?.metrics.trend !== "UNAVAILABLE"
+          ? (zone?.metrics.trend ?? "WAITING")
+          : "WAITING",
+    };
+  });
 
   async function toggleAutomatic() {
     if (!snapshot) return;
@@ -96,58 +116,77 @@ export default function Operations() {
         }
       />
 
-      <SourceControl cameras={facility.cameras} />
+      <section className="mb-4 grid overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-[1.35fr_.95fr_.8fr_.8fr_.95fr] lg:gap-px">
+        <div className="bg-card p-4">
+          <div className="text-[9px] font-medium uppercase tracking-[.14em] text-muted-foreground">
+            System decision
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span
+              className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${decision.route_state === "NEUTRAL" ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
+            >
+              {decision.route_state === "NEUTRAL" ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <ArrowRight size={16} />
+              )}
+            </span>
+            <div>
+              <div className="text-lg font-semibold leading-tight">
+                {monitoring
+                  ? decisionMessage(decision.route_state)
+                  : "WAITING FOR CAMERAS"}
+              </div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                {monitoring
+                  ? recommendedExit
+                    ? `Recommended route: ${recommendedExit.name}`
+                    : decision.route_state === "NEUTRAL"
+                      ? "Both exits available"
+                      : "No preferred exit"
+                  : "No operational guidance yet"}
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric
-          icon={ShieldAlert}
-          label="Main Area queue"
-          value={monitoring ? (snapshot.queue_level ?? "Analyzing") : "—"}
-          detail="Smoothed queue condition"
-          tone="teal"
+        <QuickStatus
+          label="Main Area"
+          value={monitoring ? (snapshot.queue_level ?? "ANALYZING") : "WAITING"}
+          lines={[
+            `Trend: ${monitoring ? (snapshot.queue_trend ?? "Analyzing") : "Waiting"}`,
+            `Wait: ${monitoring ? (snapshot.estimated_wait_label ?? "Analyzing") : "—"}`,
+          ]}
         />
-        <Metric
-          icon={TrendingUp}
-          label="Main Area trend"
-          value={monitoring ? (snapshot.queue_trend ?? "Analyzing") : "—"}
-          detail="Sustained recent movement"
-          tone={snapshot.queue_trend === "RISING" ? "amber" : "teal"}
-        />
-        <Metric
-          icon={Camera}
-          label="Estimated wait"
-          value={
-            monitoring ? (snapshot.estimated_wait_label ?? "Analyzing") : "—"
-          }
-          detail="Current crowd and exit-flow conditions"
-          tone={
-            snapshot.queue_level === "VERY HIGH"
-              ? "red"
-              : snapshot.queue_level === "HIGH"
-                ? "amber"
-                : "teal"
-          }
-        />
-        <Metric
+
+        {exitSummary.slice(0, 2).map(({ exit, level, trend }) => (
+          <QuickStatus
+            key={exit.id}
+            label={exit.name}
+            value={level}
+            lines={[
+              `Trend: ${trend}`,
+              exit.id === decision.recommended_exit_id
+                ? "RECOMMENDED"
+                : "Route monitored",
+            ]}
+            recommended={exit.id === decision.recommended_exit_id}
+          />
+        ))}
+
+        <QuickStatus
           icon={Cpu}
-          label="ESP32"
-          value={
-            connectedSentinels
-              ? "Connected"
-              : hardwareConfigured
-                ? "Disconnected"
-                : "Not configured"
-          }
-          detail={
-            connectedSentinels
-              ? `${connectedSentinels} field unit online`
-              : hardwareConfigured
-                ? "AI remains active; state will resync"
-                : "Configure a device when ready"
-          }
-          tone={connectedSentinels ? "teal" : "amber"}
+          label="Control"
+          value={connectedSentinels ? "ESP32 ONLINE" : "ESP32 OFFLINE"}
+          lines={[
+            `Intervention: ${monitoring ? humanize(snapshot.intervention.status) : "Waiting"}`,
+            snapshot.automatic_control ? "Automatic mode" : "Manual mode",
+          ]}
+          warning={!connectedSentinels}
         />
       </section>
+
+      {!monitoring && <SourceControl cameras={facility.cameras} />}
 
       <Panel
         title="Live cameras (Main Area · Exit A · Exit B)"
@@ -162,6 +201,8 @@ export default function Operations() {
           <LiveCameraGrid snapshot={snapshot} />
         </div>
       </Panel>
+
+      {monitoring && <SourceControl cameras={facility.cameras} />}
 
       <section className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]">
         <Panel
@@ -338,37 +379,39 @@ export default function Operations() {
   );
 }
 
-function Metric({
+function QuickStatus({
   icon: Icon,
   label,
   value,
-  detail,
-  tone,
+  lines,
+  recommended = false,
+  warning = false,
 }: {
-  icon: typeof ShieldAlert;
+  icon?: typeof ShieldAlert;
   label: string;
   value: string;
-  detail: string;
-  tone: "teal" | "amber" | "red";
+  lines: string[];
+  recommended?: boolean;
+  warning?: boolean;
 }) {
-  const color =
-    tone === "red"
-      ? "text-destructive bg-destructive/10"
-      : tone === "amber"
-        ? "text-primary bg-primary/10"
-        : "text-secondary bg-secondary/10";
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          {label}
-        </span>
-        <span className={`grid h-8 w-8 place-items-center rounded-lg ${color}`}>
-          <Icon size={15} />
-        </span>
+    <div
+      className={`bg-card p-4 ${recommended ? "ring-1 ring-inset ring-secondary/50" : ""}`}
+    >
+      <div className="flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-[.14em] text-muted-foreground">
+        {Icon && <Icon size={12} />}
+        {label}
       </div>
-      <div className="mt-3 text-2xl font-semibold tracking-tight">{value}</div>
-      <div className="mt-1 text-[10px] text-muted-foreground">{detail}</div>
+      <div
+        className={`mt-2 text-sm font-semibold ${recommended ? "text-secondary" : warning ? "text-primary" : "text-foreground"}`}
+      >
+        {value}
+      </div>
+      <div className="mt-2 space-y-0.5 text-[9px] text-muted-foreground">
+        {lines.map((line) => (
+          <div key={line}>{line}</div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -8,7 +8,9 @@ import type { CameraAnalysisMetrics } from "@/lib/cv-detection";
 
 export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
   const station = useBrowserCameras();
-  const cameras = snapshot.facility.cameras.filter((camera) => camera.enabled);
+  const cameras = snapshot.facility.cameras
+    .filter((camera) => camera.enabled)
+    .sort((a, b) => cameraRank(a) - cameraRank(b));
   const reporting = new Set(snapshot.reporting_camera_ids);
   const streaming = new Set(snapshot.streaming_camera_ids ?? []);
   const columns =
@@ -16,15 +18,34 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
       ? "grid-cols-1"
       : cameras.length === 2
         ? "md:grid-cols-2"
-        : cameras.length <= 4
-          ? "md:grid-cols-2 xl:grid-cols-3"
-          : "sm:grid-cols-2 xl:grid-cols-3";
+        : cameras.length === 3
+          ? "md:grid-cols-2 xl:grid-cols-[minmax(0,1.65fr)_minmax(260px,.85fr)] xl:grid-rows-2"
+          : cameras.length <= 4
+            ? "md:grid-cols-2 xl:grid-cols-3"
+            : "sm:grid-cols-2 xl:grid-cols-3";
+
+  function cameraRank(camera: (typeof cameras)[number]) {
+    const zones = snapshot.facility.zones.filter((zone) =>
+      camera.zone_ids.includes(zone.id),
+    );
+    if (zones.some((zone) => zone.type === "MAIN_AREA")) return 0;
+    const exit = snapshot.facility.exits.find(
+      (item) =>
+        item.camera_ids.includes(camera.id) ||
+        zones.some((zone) => zone.id === item.zone_id),
+    );
+    const label = `${exit?.name ?? ""} ${camera.name}`.toLowerCase();
+    if (label.includes("exit a")) return 1;
+    if (label.includes("exit b")) return 2;
+    return 3;
+  }
 
   return (
     <div
       className={
         "grid gap-3 " +
         columns +
+        (cameras.length === 3 ? " xl:h-[380px]" : "") +
         (cameras.length > 9 ? " max-h-[760px] overflow-y-auto pr-1" : "")
       }
     >
@@ -34,6 +55,16 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
         );
         const primary = [...zones].sort((a, b) => b.risk - a.risk)[0];
         const isMainArea = zones.some((zone) => zone.type === "MAIN_AREA");
+        const assignedExit = snapshot.facility.exits.find(
+          (exit) =>
+            exit.camera_ids.includes(camera.id) ||
+            zones.some((zone) => zone.id === exit.zone_id),
+        );
+        const roleLabel = isMainArea
+          ? "MAIN AREA"
+          : (assignedExit?.name.toUpperCase() ??
+            primary?.name.toUpperCase() ??
+            "EXIT CAMERA");
         const live = reporting.has(camera.id);
         const videoLive = streaming.has(camera.id);
         const browserSource = Boolean(station.videos[camera.id]);
@@ -59,9 +90,11 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
           <Link
             key={camera.id}
             href={"/cameras/" + encodeURIComponent(camera.id)}
-            className="group overflow-hidden border border-border bg-card transition-colors hover:border-primary/50"
+            className={`group overflow-hidden border bg-card transition-colors hover:border-primary/50 ${cameras.length === 3 ? "xl:h-full xl:min-h-0" : ""} ${isMainArea ? "border-secondary/40 md:col-span-2 xl:col-span-1 xl:row-span-2" : "border-border"}`}
           >
-            <div className="relative aspect-video overflow-hidden bg-[#071019]">
+            <div
+              className={`relative aspect-video overflow-hidden bg-[#071019] ${cameras.length === 3 ? (isMainArea ? "xl:h-[296px] xl:aspect-auto" : "xl:h-[104px] xl:aspect-auto") : ""}`}
+            >
               {browserSource ? (
                 <DirectCameraFeed
                   cameraName={camera.name}
@@ -102,11 +135,26 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                 </div>
               )}
             </div>
-            <div className="p-3">
+            <div
+              className={
+                cameras.length === 3
+                  ? isMainArea
+                    ? "p-3"
+                    : "p-2.5"
+                  : isMainArea
+                    ? "p-4"
+                    : "p-3"
+              }
+            >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[12px] font-semibold">{camera.name}</div>
+                  <div
+                    className={`font-semibold tracking-wide ${isMainArea ? "text-base text-secondary" : "text-sm text-primary"}`}
+                  >
+                    {roleLabel}
+                  </div>
                   <div className="mt-1 text-[9px] text-muted-foreground">
+                    {camera.name} ·{" "}
                     {zones.map((zone) => zone.name).join(", ") || "Unassigned"}
                   </div>
                 </div>
@@ -122,24 +170,15 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                   </span>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-4 gap-px bg-border">
+              <div className="mt-2 grid grid-cols-3 gap-px bg-border">
                 <Datum
-                  label="STATE"
+                  label={isMainArea ? "QUEUE LEVEL" : "CROWD LEVEL"}
                   value={
-                    hasAnalyzedData
-                      ? stateForRisk(browserMetric.riskScore)
-                      : live
-                        ? (primary?.crowd_state.replaceAll("_", " ") ??
-                          "NO DATA")
-                        : isRunning
-                          ? "INITIALIZING"
-                          : "NO DATA"
-                  }
-                />
-                <Datum
-                  label="LEVEL"
-                  value={
-                    riskValue !== "—" ? crowdLevel(Number(riskValue)) : "—"
+                    isMainArea && snapshot.queue_level
+                      ? snapshot.queue_level
+                      : riskValue !== "—"
+                        ? crowdLevel(Number(riskValue))
+                        : "—"
                   }
                 />
                 <Datum label="TREND" value={trendValue} />
@@ -332,14 +371,6 @@ function Datum({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
-}
-
-function stateForRisk(risk: number): string {
-  if (risk >= 90) return "CRITICAL RISK";
-  if (risk >= 75) return "FLOW INSTABILITY";
-  if (risk >= 60) return "CONGESTED";
-  if (risk >= 40) return "CONGESTION BUILDING";
-  return "NORMAL";
 }
 
 function crowdLevel(risk: number): string {
