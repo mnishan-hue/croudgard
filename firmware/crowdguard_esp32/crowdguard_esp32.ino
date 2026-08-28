@@ -6,8 +6,8 @@
 #include <ESP32Servo.h>
 #include <HTTPClient.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 #include <WebServer.h>
+#include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include "secrets.h"
@@ -61,17 +61,131 @@ unsigned long audioStartedAt = 0;
 bool mdnsStarted = false;
 bool dfPlayerReady = false;
 
-void showTFTMessage(const String& line1, const String& line2 = "") {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(3);
-  tft.setCursor(18, 65);
-  tft.println(line1);
-  if (line2.length()) {
-    tft.setTextSize(2);
-    tft.setCursor(18, 125);
-    tft.println(line2);
+void drawCenteredText(const String& text, int y, int size, uint16_t color,
+                      uint16_t background) {
+  tft.setTextSize(size);
+  tft.setTextColor(color, background);
+  const int x = max(4, (tft.width() - tft.textWidth(text)) / 2);
+  tft.setCursor(x, y);
+  tft.print(text);
+}
+
+void drawRouteCard(int x, int y, int width, const String& exitName,
+                   const String& status, uint16_t color) {
+  const uint16_t cardBackground = tft.color565(18, 28, 43);
+  tft.fillRoundRect(x, y, width, 70, 10, cardBackground);
+  tft.drawRoundRect(x, y, width, 70, 10, color);
+  tft.fillRoundRect(x + 8, y + 8, 8, 54, 4, color);
+  tft.setTextColor(TFT_WHITE, cardBackground);
+  tft.setTextSize(2);
+  tft.setCursor(x + 27, y + 12);
+  tft.print(exitName);
+  tft.setTextColor(color, cardBackground);
+  tft.setTextSize(1);
+  tft.setCursor(x + 27, y + 44);
+  tft.print(status);
+}
+
+void showGuidanceScreen(const String& state) {
+  const uint16_t background = tft.color565(5, 12, 24);
+  const uint16_t headerBackground = tft.color565(10, 28, 48);
+  const uint16_t cardBackground = tft.color565(14, 24, 39);
+  const uint16_t muted = tft.color565(155, 174, 194);
+  const uint16_t safe = tft.color565(18, 210, 145);
+  const uint16_t danger = tft.color565(244, 74, 74);
+  const uint16_t caution = tft.color565(255, 174, 32);
+  const uint16_t neutral = tft.color565(42, 190, 220);
+  const int screenWidth = tft.width();
+
+  String title = "THANK YOU";
+  String subtitle = "FLOW IS NORMAL - STAY SAFE";
+  String exitAStatus = "OPEN";
+  String exitBStatus = "OPEN";
+  uint16_t accent = safe;
+  uint16_t exitAColor = neutral;
+  uint16_t exitBColor = neutral;
+
+  if (state == "REDIRECT_A") {
+    title = "USE EXIT A";
+    subtitle = "EXIT A IS THE SAFER ROUTE";
+    exitAStatus = "BEST ROUTE";
+    exitBStatus = "CONGESTED";
+    accent = safe;
+    exitAColor = safe;
+    exitBColor = danger;
+  } else if (state == "REDIRECT_B") {
+    title = "USE EXIT B";
+    subtitle = "EXIT B IS THE SAFER ROUTE";
+    exitAStatus = "CONGESTED";
+    exitBStatus = "BEST ROUTE";
+    accent = safe;
+    exitAColor = danger;
+    exitBColor = safe;
+  } else if (state == "BOTH_BUSY") {
+    title = "WALK SLOWLY";
+    subtitle = "BOTH EXITS ARE BUSY - STAY CALM";
+    exitAStatus = "BUSY";
+    exitBStatus = "BUSY";
+    accent = caution;
+    exitAColor = caution;
+    exitBColor = caution;
   }
+
+  tft.fillScreen(background);
+  tft.fillRect(0, 0, screenWidth, 52, headerBackground);
+  tft.fillCircle(27, 26, 13, accent);
+  tft.fillCircle(27, 26, 7, headerBackground);
+  tft.setTextColor(TFT_WHITE, headerBackground);
+  tft.setTextSize(2);
+  tft.setCursor(52, 11);
+  tft.print("CROWDGUARD");
+  tft.setTextColor(muted, headerBackground);
+  tft.setTextSize(1);
+  tft.setCursor(53, 34);
+  tft.print("LIVE EXIT GUIDANCE");
+
+  tft.fillRoundRect(18, 66, screenWidth - 36, 128, 14, cardBackground);
+  tft.fillRoundRect(18, 66, 9, 128, 5, accent);
+  drawCenteredText(title, 92, 4, TFT_WHITE, cardBackground);
+  drawCenteredText(subtitle, 151, 1, accent, cardBackground);
+
+  const int cardWidth = (screenWidth - 48) / 2;
+  drawRouteCard(18, 210, cardWidth, "EXIT A", exitAStatus, exitAColor);
+  drawRouteCard(30 + cardWidth, 210, cardWidth, "EXIT B", exitBStatus,
+                exitBColor);
+
+  drawCenteredText("FOLLOW THE GREEN GUIDANCE LIGHTS", 300, 1, muted,
+                   background);
+}
+
+void logHardwareState(const String& requestedState,
+                      const String& previousState) {
+  Serial.println();
+  Serial.println("========== CROWDGUARD STATUS ==========");
+  if (requestedState == "REDIRECT_A") {
+    Serial.println("STATUS : EXIT B CONGESTED");
+    Serial.println("SCREEN : USE EXIT A");
+    Serial.println("ROUTE  : EXIT A IS THE SAFER ROUTE");
+  } else if (requestedState == "REDIRECT_B") {
+    Serial.println("STATUS : EXIT A CONGESTED");
+    Serial.println("SCREEN : USE EXIT B");
+    Serial.println("ROUTE  : EXIT B IS THE SAFER ROUTE");
+  } else if (requestedState == "BOTH_BUSY") {
+    Serial.println("STATUS : BOTH EXITS BUSY");
+    Serial.println("SCREEN : WALK SLOWLY");
+    Serial.println("ROUTE  : STAY CALM AND FOLLOW GUIDANCE");
+  } else {
+    if (requestedState == "RESET") {
+      Serial.println("STATUS : RESET COMPLETE - SYSTEM NORMAL");
+    } else if (previousState != "NEUTRAL" && previousState != "RESET") {
+      Serial.println("STATUS : CONGESTION CLEARED - SYSTEM NORMAL");
+    } else {
+      Serial.println("STATUS : NORMAL");
+    }
+    Serial.println("SCREEN : THANK YOU");
+    Serial.println("ROUTE  : BOTH EXITS OPEN");
+  }
+  Serial.println("=======================================");
 }
 
 void setLedSegment(int first, int count, uint32_t color) {
@@ -119,7 +233,7 @@ void initializeHardware() {
 
   tft.init();
   tft.setRotation(1);
-  showTFTMessage("THANK YOU");
+  showGuidanceScreen("NEUTRAL");
 
   dfSerial.begin(9600, SERIAL_8N1, DFPLAYER_RX, DFPLAYER_TX);
   dfPlayerReady = dfPlayer.begin(dfSerial);
@@ -132,6 +246,7 @@ void initializeHardware() {
 }
 
 void applyHardwareState(const String& state) {
+  const String previousState = currentState;
   currentState = state;
   if (state == "REDIRECT_A" || state == "REDIRECT_B") {
     const bool useExitA = state == "REDIRECT_A";
@@ -142,7 +257,7 @@ void applyHardwareState(const String& state) {
     exitAState = useExitA ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
     exitBState = useExitA ? "RED_RESTRICTED" : "GREEN_GUIDANCE";
     guidanceServo.write(useExitA ? SERVO_EXIT_A_ANGLE : SERVO_EXIT_B_ANGLE);
-    showTFTMessage(useExitA ? "USE EXIT A" : "USE EXIT B");
+    showGuidanceScreen(state);
     setRouteLeds(
         useExitA ? strip.Color(0, 255, 0) : strip.Color(255, 0, 0),
         useExitA ? strip.Color(255, 0, 0) : strip.Color(0, 255, 0));
@@ -156,7 +271,7 @@ void applyHardwareState(const String& state) {
     exitAState = "CAUTION";
     exitBState = "CAUTION";
     guidanceServo.write(SERVO_NEUTRAL_ANGLE);
-    showTFTMessage("PLEASE WALK", "SLOWLY");
+    showGuidanceScreen(state);
     setRouteLeds(strip.Color(255, 150, 0), strip.Color(255, 150, 0));
     playGuidanceTrack(3);
     digitalWrite(LED_BUILTIN, HIGH);
@@ -168,10 +283,11 @@ void applyHardwareState(const String& state) {
     exitAState = "NEUTRAL";
     exitBState = "NEUTRAL";
     guidanceServo.write(SERVO_NEUTRAL_ANGLE);
-    showTFTMessage("THANK YOU");
+    showGuidanceScreen("NEUTRAL");
     setRouteLeds(0, 0);
     digitalWrite(LED_BUILTIN, LOW);
   }
+  logHardwareState(state, previousState);
 }
 
 void addHardwareState(JsonObject state) {
