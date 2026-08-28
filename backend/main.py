@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -15,7 +16,30 @@ from backend.store import SQLiteStore
 DB_PATH = os.getenv("CROWDGUARD_DB_PATH", str(Path(__file__).parent / "crowdguard.db"))
 store = SQLiteStore(DB_PATH)
 service = CrowdGuardService(store)
-app = FastAPI(title="CrowdGuard Sentinel API", version="1.0.0")
+
+
+async def hardware_monitor():
+    interval = max(2.0, float(os.getenv("CROWDGUARD_ESP32_HEARTBEAT_SECONDS", "5")))
+    while True:
+        await asyncio.to_thread(service.poll_hardware)
+        await asyncio.sleep(interval)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(hardware_monitor())
+    app.state.hardware_monitor_task = task
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="CrowdGuard Sentinel API", version="1.0.0", lifespan=lifespan)
 MAX_CAMERA_FRAME_BYTES = 1_500_000
 local_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 configured_origins = [origin.strip().rstrip("/") for origin in os.getenv("CROWDGUARD_CORS_ORIGINS", "").split(",") if origin.strip()]
@@ -34,7 +58,9 @@ app.add_middleware(
 def health():
     facility=service.facility
     connected = bool(facility and any(item.connected for item in facility.sentinels))
-    return {"status": "ONLINE", "database": "ONLINE" if facility else "ERROR", "active_facility": facility.id if facility else None, "ai": service.ai.get_health(), "mode": "LIVE CAMERA", "sentinel_hardware": "CONNECTED" if connected else "NOT CONFIGURED"}
+    configured = bool(facility and any(item.ip_address for item in facility.sentinels))
+    hardware_status = "CONNECTED" if connected else "DISCONNECTED" if configured else "NOT CONFIGURED"
+    return {"status": "ONLINE", "database": "ONLINE" if facility else "ERROR", "active_facility": facility.id if facility else None, "ai": service.ai.get_health(), "mode": "LIVE CAMERA", "sentinel_hardware": hardware_status}
 
 
 @app.get("/api/system")
@@ -370,9 +396,13 @@ def events(limit: int = 100): return store.events(min(500,max(1,limit)))
 
 @app.post("/api/control/auto")
 def auto_control(request: AutoControlRequest):
-    if request.enabled and not any(sentinel.connected for sentinel in active().sentinels):
-        raise HTTPException(422, "Automatic guidance requires at least one connected Sentinel")
     store.set_setting("automatic_control",str(request.enabled).lower())
+    if request.enabled:
+        snapshot = service.snapshot()
+        service.dispatch_decision(snapshot.decision, force=True, source="AUTO_MODE")
+        store.add_event(EventLog(category="HARDWARE", message="Automatic hardware control enabled"))
+    else:
+        store.add_event(EventLog(category="HARDWARE", severity="WARNING", message="Manual hardware control enabled"))
     return service.snapshot()
 
 
@@ -381,15 +411,32 @@ def manual_control(request: ManualControlRequest):
     facility=active()
     sentinel=next((x for x in facility.sentinels if x.id==request.sentinel_id),None) if request.sentinel_id else (facility.sentinels[0] if facility.sentinels else None)
     if request.sentinel_id and not sentinel: raise HTTPException(404,"Sentinel not found")
-    if sentinel and not sentinel.connected: raise HTTPException(422,"Selected Sentinel is not connected")
-    if request.action=="REDIRECT_TO_EXIT" and not any(x.id==request.recommended_exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits): raise HTTPException(422,"Recommended exit is not available")
     if not sentinel: raise HTTPException(422,"No Sentinel configured")
+    state = request.action
+    exit_id = request.recommended_exit_id
+    if state == "NORMAL": state = "NEUTRAL"
+    if state == "CRITICAL": state = "BOTH_BUSY"
+    if state == "REDIRECT_TO_EXIT":
+        state = "REDIRECT_A" if exit_id == "exit_a" else "REDIRECT_B" if exit_id == "exit_b" else state
+    if state == "REDIRECT_A": exit_id = "exit_a"
+    if state == "REDIRECT_B": exit_id = "exit_b"
+    if state in {"REDIRECT_A", "REDIRECT_B"} and not any(x.id==exit_id and x.enabled and x.status not in {"CLOSED","RESTRICTED"} for x in facility.exits):
+        raise HTTPException(422,"Recommended exit is not available")
+    decision = Decision(
+        action="RESET" if state == "RESET" else "CRITICAL" if state == "BOTH_BUSY" else "REDIRECT_TO_EXIT" if state in {"REDIRECT_A", "REDIRECT_B"} else "NORMAL",
+        route_state="BOTH_BUSY" if state == "BOTH_BUSY" else state if state in {"NEUTRAL", "REDIRECT_A", "REDIRECT_B"} else "NEUTRAL",
+        recommended_exit_id=exit_id if state in {"REDIRECT_A", "REDIRECT_B"} else None,
+        reason="Manual operator command",
+    )
+    store.set_setting("automatic_control","false")
     try:
-        decision=Decision(action=request.action,recommended_exit_id=request.recommended_exit_id,reason="Manual operator command")
-        service.dispatch_decision(decision,sentinel.id,force=True)
-    except ConnectionError as exc:
-        raise HTTPException(503,str(exc)) from exc
-    store.set_setting("automatic_control","false"); store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if request.action=="CRITICAL" else "WARNING",message=f"Manual {request.action} command sent to {sentinel.name}")); return service.snapshot()
+        service.dispatch_decision(decision,sentinel.id,force=True,source="MANUAL")
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
+    updated_sentinel = next(item for item in service.facility.sentinels if item.id == sentinel.id)
+    delivery = "acknowledged" if updated_sentinel.command_acknowledged else "queued for reconnect"
+    store.add_event(EventLog(category="HARDWARE",severity="CRITICAL" if state=="BOTH_BUSY" else "WARNING",message=f"Manual {state} command {delivery} for {sentinel.name}"))
+    return service.snapshot()
 
 
 
@@ -401,7 +448,8 @@ async def live_socket(websocket: WebSocket):
         while True:
             await websocket.send_text(service.snapshot().model_dump_json())
             await asyncio.sleep(1)
-    except (WebSocketDisconnect, RuntimeError): pass
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        return
 
 
 FRONTEND_DIR = Path(os.getenv("CROWDGUARD_FRONTEND_DIR", Path(__file__).parent.parent / "artifacts" / "crowdguard-sentinel" / "dist" / "public"))

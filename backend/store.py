@@ -47,6 +47,7 @@ class SQLiteStore:
                     if "mock" in sentinel.device_id or "demo" in sentinel.device_id:
                         sentinel.device_id = "unconfigured"
                     sentinel.connected = False
+                    sentinel.command_acknowledged = False
                     sentinel.hardware_state = sentinel.hardware_state.__class__()
                 self.save_facility(facility)
             if not self.list_facilities():
@@ -55,9 +56,6 @@ class SQLiteStore:
             if not self.get_facility(self.get_setting("active_facility")):
                 self.set_setting("active_facility", self.list_facilities()[0].id)
             self.set_setting("current_scenario", "LIVE")
-            if not any(sentinel.connected for facility in self.list_facilities() for sentinel in facility.sentinels):
-                self.set_setting("automatic_control", "false")
-            self.clear_events()
 
     def list_facilities(self):
         with self._lock:

@@ -14,6 +14,7 @@ WORKER_OPTIONS = {
     "density_count_capacity": "--density-count-capacity",
     "frame_skip": "--frame-skip",
     "image_size": "--image-size",
+    "inference_fps": "--inference-fps",
     "jpeg_quality": "--jpeg-quality",
     "model": "--model",
     "stream_fps": "--stream-fps",

@@ -69,7 +69,7 @@ The device is marked connected only when the returned ID matches.
 
 ## 5. Test commands safely
 
-Use the manual controls on the Devices page after the heartbeat succeeds. Each command must return `"acknowledged": true`. CrowdGuard otherwise treats the command as failed.
+Use the manual controls on the Devices page. Commands are preserved if the device is offline. Each delivered command must return matching `acknowledged`, `device_id`, `state`, and `command_id` fields; otherwise CrowdGuard performs only its bounded retry and marks the device disconnected.
 
 The starter firmware implements the complete HTTP contract and a safe onboard-LED demonstration. Replace `applyHardwareState()` with the required servo, WS2812B, display and DFPlayer code for the physical prototype.
 

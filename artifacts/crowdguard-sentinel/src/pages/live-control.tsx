@@ -4,11 +4,11 @@ import {
   ArrowRight,
   Bot,
   CircleAlert,
+  Clock3,
   Gauge,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
-  Users,
 } from "lucide-react";
 import {
   Area,
@@ -88,24 +88,7 @@ export default function LiveControl() {
   const critical = prediction.risk >= 90;
   const isLocalRunning = cameraStation.status === "RUNNING";
   const hasLiveAI = snapshot.camera_ai_active || isLocalRunning;
-  const localMetrics = Object.values(cameraStation.metrics);
-  const totalPeopleCount =
-    isLocalRunning && localMetrics.length
-      ? localMetrics.some((m) => !m.isWarmingUp)
-        ? String(
-            localMetrics
-              .filter((m) => !m.isWarmingUp)
-              .reduce((sum, m) => sum + m.peopleCount, 0),
-          )
-        : "—"
-      : hasLiveAI
-        ? String(
-            facility.zones.reduce(
-              (sum, zone) => sum + zone.metrics.people_count,
-              0,
-            ),
-          )
-        : "—";
+  const hasMainQueue = hasLiveAI && snapshot.queue_level !== null;
 
   async function toggleAutomatic() {
     setControlBusy(true);
@@ -191,12 +174,35 @@ export default function LiveControl() {
               <p className="mt-2 text-[12px] text-muted-foreground">
                 Connect one or more cameras above or start the configured edge
                 workers. Until current observations arrive, CrowdGuard
-                intentionally hides risk, people count, and exit recommendations.
+                intentionally hides risk, queue estimates, and exit
+                recommendations.
               </p>
             </div>
           </div>
         </section>
       )}
+      <section className="mb-5 border border-secondary/35 bg-secondary/[.04] p-4">
+        <div className="mb-3">
+          <div className="data-mono text-[9px] text-secondary">MAIN AREA</div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Estimated from current crowd and exit-flow conditions.
+          </p>
+        </div>
+        <div className="grid gap-px bg-border sm:grid-cols-3">
+          <Brief
+            label="Queue level"
+            value={hasMainQueue ? snapshot.queue_level! : "Waiting for camera"}
+          />
+          <Brief
+            label="Trend"
+            value={hasMainQueue ? snapshot.queue_trend! : "—"}
+          />
+          <Brief
+            label="Estimated wait"
+            value={hasMainQueue ? snapshot.estimated_wait_label! : "—"}
+          />
+        </div>
+      </section>
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
           icon={Gauge}
@@ -209,11 +215,15 @@ export default function LiveControl() {
           danger={hasLiveAI && prediction.risk >= 75}
         />
         <Metric
-          icon={Users}
-          label="People detected"
-          value={totalPeopleCount}
-          unit={hasLiveAI && totalPeopleCount !== "—" ? "people" : ""}
-          note={hasLiveAI ? "Live camera count" : "Waiting for camera"}
+          icon={Clock3}
+          label="Main area queue"
+          value={hasMainQueue ? snapshot.queue_level! : "—"}
+          unit=""
+          note={
+            hasMainQueue
+              ? `Estimated wait ${snapshot.estimated_wait_label}`
+              : "Waiting for Main Area camera"
+          }
         />
         <Metric
           icon={ArrowRight}
@@ -238,8 +248,14 @@ export default function LiveControl() {
           }
         />
       </div>
-      <Panel title="Live camera network" eyebrow={`${snapshot.streaming_camera_ids?.length ?? 0} VIDEO · ${snapshot.reporting_camera_ids.length} AI · ${facility.cameras.filter((camera)=>camera.enabled).length} CONFIGURED`} className="mb-5">
-        <div className="p-3"><LiveCameraGrid snapshot={snapshot}/></div>
+      <Panel
+        title="Live camera network"
+        eyebrow={`${snapshot.streaming_camera_ids?.length ?? 0} VIDEO · ${snapshot.reporting_camera_ids.length} AI · ${facility.cameras.filter((camera) => camera.enabled).length} CONFIGURED`}
+        className="mb-5"
+      >
+        <div className="p-3">
+          <LiveCameraGrid snapshot={snapshot} />
+        </div>
       </Panel>
       <div
         className={`${hasLiveAI ? "grid" : "hidden"} gap-5 xl:grid-cols-[1.45fr_1fr]`}

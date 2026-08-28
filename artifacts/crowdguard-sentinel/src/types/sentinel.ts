@@ -99,7 +99,13 @@ export interface Sentinel {
   connected: boolean;
   last_heartbeat: string | null;
   last_command: string | null;
+  desired_state:
+    "NEUTRAL" | "REDIRECT_A" | "REDIRECT_B" | "BOTH_BUSY" | "RESET";
+  acknowledged_state:
+    "NEUTRAL" | "REDIRECT_A" | "REDIRECT_B" | "BOTH_BUSY" | "RESET" | null;
+  last_command_id: string | null;
   command_acknowledged: boolean;
+  last_error: string | null;
   latency_ms: number | null;
   hardware_state: HardwareState;
 }
@@ -127,6 +133,10 @@ export interface BackendSnapshot {
   reporting_camera_ids: string[];
   streaming_camera_ids: string[];
   exit_coverage_complete: boolean;
+  queue_level: "LOW" | "MODERATE" | "HIGH" | "VERY HIGH" | null;
+  queue_trend: "RISING" | "STABLE" | "FALLING" | null;
+  estimated_wait: number | null;
+  estimated_wait_label: string | null;
   prediction: {
     provider: string;
     crowd_state: CrowdState;
@@ -143,6 +153,7 @@ export interface BackendSnapshot {
   };
   decision: {
     action: string;
+    route_state: "NEUTRAL" | "REDIRECT_A" | "REDIRECT_B" | "BOTH_BUSY";
     recommended_exit_id: string | null;
     affected_zone_id: string | null;
     reason: string;

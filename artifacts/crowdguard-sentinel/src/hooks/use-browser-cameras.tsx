@@ -94,7 +94,7 @@ const BrowserCameraContext = createContext<BrowserCameraContextValue | null>(
 
 const STORAGE_KEY = "crowdguard.browser-camera-assignments.v1";
 const ANALYSIS_WIDTH = 300;
-const ANALYSIS_TICKS_PER_SECOND = 12;
+const TARGET_INFERENCE_FPS = 4;
 const FRAME_PUBLISH_INTERVAL_MS = 1_000;
 const MODEL_PATH = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/person_model/model.json`;
 const SYNC_TOLERANCE_SECONDS = 0.2; // 200 ms sync tolerance window
@@ -209,9 +209,8 @@ async function sendDemoControl(
       }
       return;
     }
-  } catch (err) {
-    // Offline backend should not crash frontend demonstration.
-    console.warn("Backend camera-control notification deferred", err);
+  } catch {
+    // Local playback and AI remain usable while the backend reconnects.
   } finally {
     window.clearTimeout(timeout);
   }
@@ -236,6 +235,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
   const runningRef = useRef(false);
   const runtimesRef = useRef<RuntimeCamera[]>([]);
   const generationRef = useRef(0);
+  const playbackControlRef = useRef(false);
   const confidenceRef = useRef(confidenceThreshold);
   confidenceRef.current = confidenceThreshold;
 
@@ -384,7 +384,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
       if (!context) throw new Error("Camera drawing surface is unavailable");
       context.drawImage(runtime.video, 0, 0, targetWidth, targetHeight);
 
-      const rawDetections = await model.detect(runtime.canvas, 50);
+      const rawDetections = await model.detect(runtime.canvas, 30);
       const people = applyPersonNMS(rawDetections, confidenceRef.current, 0.4);
       runtime.boxes = people;
       runtime.hasAnalyzed = true;
@@ -453,6 +453,11 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
 
         void (async () => {
           const publishStart = performance.now();
+          const controller = new AbortController();
+          const publishTimeout = window.setTimeout(
+            () => controller.abort(),
+            2_000,
+          );
           try {
             const frameRequest = shouldPublishFrame
               ? canvasBlob(runtime.canvas).then((frame) =>
@@ -462,6 +467,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
                       method: "POST",
                       headers: { "Content-Type": "image/jpeg" },
                       body: frame,
+                      signal: controller.signal,
                     },
                   ),
                 )
@@ -470,6 +476,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
             const observationRequest = fetch(`${apiBase}/ai/cv-observation`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              signal: controller.signal,
               body: JSON.stringify({
                 camera_id: runtime.camera.id,
                 captured_at: timestamp,
@@ -496,17 +503,11 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
               performance.now() - publishStart,
             );
 
-            if (
-              (frameResponse && !frameResponse.ok) ||
-              (!obsResponse.ok && obsResponse.status !== 404)
-            ) {
-              console.warn(
-                `Backend rejected camera observation (${obsResponse.status})`,
-              );
-            }
-          } catch (reason) {
+            void obsResponse;
+          } catch {
             // Background publish delayed or backend offline
           } finally {
+            window.clearTimeout(publishTimeout);
             runtime.networkInFlight = false;
           }
         })();
@@ -533,6 +534,17 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
           sourceMode === "DEMO_VIDEOS"
             ? "Select at least one recorded video to start the demonstration."
             : "Select at least one physical camera to start monitoring.",
+        );
+        return;
+      }
+
+      if (
+        sourceMode === "DEMO_VIDEOS" &&
+        selectedCameras.length !== enabled.length
+      ) {
+        setStatus("ERROR");
+        setError(
+          "Select recorded videos for Main Area, Exit A, and Exit B before starting the 3-video demo.",
         );
         return;
       }
@@ -748,6 +760,7 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
           if (!master) return;
 
           const masterTime = master.video.currentTime;
+          master.video.playbackRate = 1;
 
           for (const slave of runtimes) {
             if (slave === master) {
@@ -769,7 +782,13 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
               !slave.video.seeking &&
               slave.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
             ) {
-              slave.video.currentTime = masterTime;
+              if (Math.abs(sync.driftMs) > 750) {
+                slave.video.currentTime = masterTime;
+              } else {
+                slave.video.playbackRate = sync.driftMs > 0 ? 0.97 : 1.03;
+              }
+            } else {
+              slave.video.playbackRate = 1;
             }
           }
         }, 250);
@@ -777,7 +796,8 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
         // 5. Fair Round-Robin AI Inference Scheduler
         void (async () => {
           let consecutiveFailures = 0;
-          const tickMilliseconds = 1000 / ANALYSIS_TICKS_PER_SECOND;
+          const tickMilliseconds =
+            1000 / (TARGET_INFERENCE_FPS * runtimes.length);
           let runtimeIndex = 0;
 
           while (runningRef.current && generation === generationRef.current) {
@@ -807,7 +827,6 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
               consecutiveFailures = 0;
             } catch (reason) {
               consecutiveFailures += 1;
-              console.warn("Camera inference frame error", reason);
               if (consecutiveFailures >= 5) {
                 cleanup();
                 setStatus("ERROR");
@@ -879,82 +898,102 @@ export function BrowserCameraProvider({ children }: { children: ReactNode }) {
     setPlaying((current) => ({ ...current, [cameraId]: true }));
   }, []);
   const playAll = useCallback(async () => {
-    const runtimes = runtimesRef.current;
-    const activeRuntimes = runtimes.filter((r) => !r.video.ended);
+    if (playbackControlRef.current) return;
+    playbackControlRef.current = true;
+    try {
+      const runtimes = runtimesRef.current;
+      const activeRuntimes = runtimes.filter((r) => !r.video.ended);
 
-    // Sync non-ended videos to master time if paused
-    const master =
-      activeRuntimes.find((r) => !r.video.paused) ?? activeRuntimes[0];
-    if (master && sourceMode === "DEMO_VIDEOS") {
-      for (const r of activeRuntimes) {
-        if (
-          r !== master &&
-          Math.abs(r.video.currentTime - master.video.currentTime) >
-            SYNC_TOLERANCE_SECONDS
-        ) {
-          r.video.currentTime = master.video.currentTime;
+      // Sync non-ended videos to master time if paused
+      const master =
+        activeRuntimes.find((r) => !r.video.paused) ?? activeRuntimes[0];
+      if (master && sourceMode === "DEMO_VIDEOS") {
+        for (const r of activeRuntimes) {
+          if (
+            r !== master &&
+            Math.abs(r.video.currentTime - master.video.currentTime) >
+              SYNC_TOLERANCE_SECONDS
+          ) {
+            r.video.currentTime = master.video.currentTime;
+          }
         }
       }
+
+      await Promise.all(activeRuntimes.map((runtime) => runtime.video.play()));
+
+      const demoIds = runtimes
+        .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+        .map((runtime) => runtime.camera.id);
+      if (demoIds.length) await sendDemoControl("START", demoIds);
+
+      setPlaying((current) => {
+        const next = { ...current };
+        for (const r of activeRuntimes) next[r.camera.id] = true;
+        return next;
+      });
+    } finally {
+      playbackControlRef.current = false;
     }
-
-    await Promise.all(activeRuntimes.map((runtime) => runtime.video.play()));
-
-    const demoIds = runtimes
-      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
-      .map((runtime) => runtime.camera.id);
-    if (demoIds.length) void sendDemoControl("START", demoIds);
-
-    setPlaying((current) => {
-      const next = { ...current };
-      for (const r of activeRuntimes) next[r.camera.id] = true;
-      return next;
-    });
   }, [sourceMode]);
 
   const pauseAll = useCallback(async () => {
-    const runtimes = runtimesRef.current;
-    for (const runtime of runtimes) runtime.video.pause();
+    if (playbackControlRef.current) return;
+    playbackControlRef.current = true;
+    try {
+      const runtimes = runtimesRef.current;
+      for (const runtime of runtimes) runtime.video.pause();
 
-    setPlaying((current) => {
-      const next = { ...current };
-      for (const r of runtimes) next[r.camera.id] = false;
-      return next;
-    });
+      setPlaying((current) => {
+        const next = { ...current };
+        for (const r of runtimes) next[r.camera.id] = false;
+        return next;
+      });
 
-    const demoIds = runtimes
-      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
-      .map((runtime) => runtime.camera.id);
-    if (demoIds.length) void sendDemoControl("PAUSE", demoIds);
+      const demoIds = runtimes
+        .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+        .map((runtime) => runtime.camera.id);
+      if (demoIds.length) await sendDemoControl("PAUSE", demoIds);
+    } finally {
+      playbackControlRef.current = false;
+    }
   }, []);
 
   const restartAll = useCallback(async () => {
-    const runtimes = runtimesRef.current;
-    const demoIds = runtimes
-      .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
-      .map((runtime) => runtime.camera.id);
+    if (playbackControlRef.current) return;
+    playbackControlRef.current = true;
+    try {
+      const runtimes = runtimesRef.current;
+      const demoIds = runtimes
+        .filter((runtime) => runtime.sourceMode === "DEMO_VIDEOS")
+        .map((runtime) => runtime.camera.id);
 
-    for (const runtime of runtimes) {
-      runtime.video.pause();
-      runtime.video.currentTime = 0;
-      runtime.lastAnalyzedAt = 0;
-      runtime.lastRisk = 0;
-      runtime.boxes = [];
-      runtime.hasAnalyzed = false;
+      for (const runtime of runtimes) {
+        runtime.video.pause();
+        runtime.video.currentTime = 0;
+        runtime.lastAnalyzedAt = 0;
+        runtime.lastRisk = 0;
+        runtime.boxes = [];
+        runtime.hasAnalyzed = false;
+      }
+      setMetrics(
+        Object.fromEntries(
+          runtimes.map((runtime) => [
+            runtime.camera.id,
+            createWarmingMetric(runtime),
+          ]),
+        ),
+      );
+
+      if (demoIds.length) await sendDemoControl("RESTART", demoIds);
+      await Promise.all(runtimes.map((runtime) => runtime.video.play()));
+      setPlaying(
+        Object.fromEntries(
+          runtimes.map((runtime) => [runtime.camera.id, true]),
+        ),
+      );
+    } finally {
+      playbackControlRef.current = false;
     }
-    setMetrics(
-      Object.fromEntries(
-        runtimes.map((runtime) => [
-          runtime.camera.id,
-          createWarmingMetric(runtime),
-        ]),
-      ),
-    );
-
-    if (demoIds.length) await sendDemoControl("RESTART", demoIds);
-    await Promise.all(runtimes.map((runtime) => runtime.video.play()));
-    setPlaying(
-      Object.fromEntries(runtimes.map((runtime) => [runtime.camera.id, true])),
-    );
   }, []);
   const value = useMemo(
     () => ({

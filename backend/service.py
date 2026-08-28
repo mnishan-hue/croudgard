@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 from functools import wraps
 from threading import RLock
+from uuid import uuid4
 
 from backend.ai.live import CameraAIProvider
 from backend.decision import DecisionEngine
-from backend.hardware.esp32_client import ESP32Client
+from backend.hardware.esp32_client import ESP32Client, canonical_hardware_state
 from backend.models import CrowdState, Decision, EventLog, Intervention, LiveSnapshot, RiskSample
+from backend.queue import MainAreaQueueEstimator
 
 
 CLASS_RISK = {
@@ -32,6 +34,7 @@ class CrowdGuardService:
         self._state_lock = RLock()
         self.ai = CameraAIProvider()
         self.decision_engine = DecisionEngine()
+        self.queue_estimator = MainAreaQueueEstimator()
         self.hardware = ESP32Client()
         self.last_dispatched_command: dict[str, str] = {}
         self.camera_people_counts: dict[str, dict] = {}
@@ -107,16 +110,23 @@ class CrowdGuardService:
     def control_demo_videos(self, request):
         camera_ids = list(dict.fromkeys(request.camera_ids))
         cameras = [self._camera(camera_id) for camera_id in camera_ids]
+        enabled_camera_ids = {
+            camera.id for camera in self.facility.cameras if camera.enabled
+        }
+        full_source_group = set(camera_ids) == enabled_camera_ids
         if request.action in {"RESTART", "STOP"}:
             for camera in cameras:
                 self.camera_people_counts.pop(camera.id, None)
                 self.camera_crowd_observations.pop(camera.id, None)
                 self.camera_cv_observations.pop(camera.id, None)
                 self.camera_frames.pop(camera.id, None)
-            self.risk_history.clear()
-            self.risk_timeline.clear()
-            self.last_dispatched_command.clear()
-            if self.store.get_setting("automatic_control") == "true":
+            if full_source_group:
+                self.risk_history.clear()
+                self.risk_timeline.clear()
+                self.last_dispatched_command.clear()
+                self.decision_engine.reset_state()
+                self.queue_estimator.reset()
+            if full_source_group and self.store.get_setting("automatic_control") == "true":
                 try:
                     self.dispatch_decision(
                         Decision(
@@ -212,7 +222,10 @@ class CrowdGuardService:
     def snapshot(self):
         facility = self._live_facility()
         reporting_ids = self.reporting_camera_ids()
-        fresh_crowd = {**self._fresh(self.camera_crowd_observations), **self._fresh_cv()}
+        fresh_people = self._fresh(self.camera_people_counts)
+        fresh_classifications = self._fresh(self.camera_crowd_observations)
+        fresh_cv = self._fresh_cv()
+        fresh_crowd = {**fresh_classifications, **fresh_cv}
         enabled_exits = [exit_ for exit_ in facility.exits if exit_.enabled]
         exit_coverage_complete = bool(enabled_exits) and all(
             any(camera_id in fresh_crowd for camera_id in exit_.camera_ids)
@@ -220,8 +233,10 @@ class CrowdGuardService:
         )
         prediction = self.ai.predict(facility)
         if not fresh_crowd:
+            self.decision_engine.reset_state()
             decision = Decision(action="NORMAL", reason="Waiting for a current camera classification before making an operational decision.")
         elif prediction.risk >= 45 and not exit_coverage_complete:
+            self.decision_engine.reset_state()
             decision = Decision(action="NORMAL", affected_zone_id=prediction.affected_zone_id, reason="Crowd risk is visible, but every enabled exit needs a current camera observation before route guidance can be issued.")
         else:
             decision = self.decision_engine.decide(facility.zones, facility.exits)
@@ -232,6 +247,36 @@ class CrowdGuardService:
             started_risk=max(self.risk_history) if self.risk_history else None,
             current_risk=prediction.risk if fresh_crowd else None,
         )
+        main_zone = next(
+            (zone for zone in facility.zones if zone.enabled and zone.type == "MAIN_AREA"),
+            None,
+        )
+        main_has_data = bool(main_zone) and any(
+            camera_id in fresh_people or camera_id in fresh_crowd
+            for camera_id in main_zone.camera_ids
+        )
+        queue_estimate = None
+        if main_zone and main_has_data:
+            sample_id = tuple(
+                sorted(
+                    (source, camera_id, item["captured_at"].isoformat())
+                    for source, observations in (
+                        ("people", fresh_people),
+                        ("classification", fresh_classifications),
+                        ("cv", fresh_cv),
+                    )
+                    for camera_id, item in observations.items()
+                )
+            )
+            queue_estimate = self.queue_estimator.estimate(
+                main_zone,
+                facility.exits,
+                facility.zones,
+                decision,
+                sample_id,
+            )
+        else:
+            self.queue_estimator.reset()
         return LiveSnapshot(
             facility=facility,
             prediction=prediction,
@@ -246,6 +291,10 @@ class CrowdGuardService:
             reporting_camera_ids=reporting_ids,
             streaming_camera_ids=self.streaming_camera_ids(),
             exit_coverage_complete=exit_coverage_complete,
+            queue_level=queue_estimate.queue_level if queue_estimate else None,
+            queue_trend=queue_estimate.queue_trend if queue_estimate else None,
+            estimated_wait=queue_estimate.estimated_wait if queue_estimate else None,
+            estimated_wait_label=queue_estimate.estimated_wait_label if queue_estimate else None,
         )
 
     def _camera(self, camera_id: str):
@@ -320,7 +369,7 @@ class CrowdGuardService:
         self.risk_timeline = (self.risk_timeline + [RiskSample(risk=maximum, intervention=marker)])[-60:]
         if changed:
             severity = "CRITICAL" if smoothed_risk >= 90 else "WARNING" if smoothed_risk >= 50 else "INFO"
-            self.store.add_event(EventLog(category="COMPUTER_VISION",severity=severity,message=f"{camera.name} changed to {state.value.replace('_',' ').lower()} from {observation.tracked_people} anonymous tracks"))
+            self.store.add_event(EventLog(category="COMPUTER_VISION",severity=severity,message=f"{camera.name} changed to {state.value.replace('_',' ').lower()} from {observation.tracked_people} estimated detections"))
         snapshot = self.snapshot()
         if snapshot.automatic_control and snapshot.exit_coverage_complete:
             try:
@@ -336,31 +385,84 @@ class CrowdGuardService:
         sentinel = next((item for item in facility.sentinels if item.id == sentinel_id), None)
         if sentinel is None:
             raise ValueError("Sentinel does not exist")
+        was_connected = sentinel.connected
         try:
             status = self.hardware.heartbeat(sentinel)
-        except Exception:
+            sentinel.last_error = None
+        except Exception as exc:
+            previous_error = sentinel.last_error
             sentinel.connected = False
             sentinel.command_acknowledged = False
+            sentinel.last_error = str(exc)
+            if was_connected or previous_error != sentinel.last_error:
+                self.store.add_event(EventLog(category="HARDWARE", severity="WARNING", message=f"{sentinel.name} disconnected: {exc}"))
             self.store.save_facility(facility)
             raise
+        if not was_connected:
+            self.store.add_event(EventLog(category="HARDWARE", message=f"{sentinel.name} connected"))
+        if not was_connected or sentinel.acknowledged_state != sentinel.desired_state or not sentinel.command_acknowledged:
+            if not self._send_hardware_state(facility, sentinel, sentinel.desired_state, "RECONNECT", force=True):
+                self.store.save_facility(facility)
+                raise ConnectionError("Sentinel reconnected but did not acknowledge desired-state synchronization")
         self.store.save_facility(facility)
         return status
 
+    def _send_hardware_state(self, facility, sentinel, state: str, source: str, force: bool = False) -> bool:
+        command_key = state
+        already_applied = (
+            sentinel.command_acknowledged
+            and sentinel.acknowledged_state == state
+            and self.last_dispatched_command.get(sentinel.id) == command_key
+        )
+        if not force and already_applied:
+            return False
+        command_id = str(uuid4())
+        sentinel.command_acknowledged = False
+        try:
+            self.hardware.set_state(sentinel, {"action": state, "command_id": command_id})
+        except Exception as exc:
+            sentinel.connected = False
+            sentinel.command_acknowledged = False
+            sentinel.last_error = str(exc)
+            self.last_dispatched_command.pop(sentinel.id, None)
+            self.store.add_event(EventLog(category="HARDWARE", severity="WARNING", message=f"{sentinel.name} command {state} pending after failure: {exc}"))
+            return False
+        self.last_dispatched_command[sentinel.id] = command_key
+        self.store.add_event(EventLog(category="HARDWARE", message=f"{sentinel.name} acknowledged {state} ({source.lower()})"))
+        return True
+
     @synchronized
-    def dispatch_decision(self, decision: Decision, sentinel_id: str | None = None, force: bool = False):
+    def dispatch_decision(self, decision: Decision, sentinel_id: str | None = None, force: bool = False, source: str = "AI"):
         facility = self.facility
-        targets = [item for item in facility.sentinels if item.connected and (sentinel_id is None or item.id == sentinel_id)]
+        targets = [item for item in facility.sentinels if sentinel_id is None or item.id == sentinel_id]
         if not targets:
-            raise ConnectionError("No connected Sentinel is available")
-        command_key = f"{decision.action}:{decision.recommended_exit_id or ''}"
+            raise ValueError("Sentinel does not exist")
+        state = canonical_hardware_state(decision.action, decision.recommended_exit_id, decision.route_state)
         for sentinel in targets:
-            if not force and self.last_dispatched_command.get(sentinel.id) == command_key:
+            desired_changed = sentinel.desired_state != state
+            sentinel.desired_state = state
+            if not sentinel.connected:
+                sentinel.command_acknowledged = False
+                if desired_changed:
+                    self.store.add_event(EventLog(category="HARDWARE", severity="WARNING", message=f"{sentinel.name} is disconnected; preserving desired state {state}"))
                 continue
-            self.hardware.set_state(sentinel, decision.model_dump())
-            self.last_dispatched_command[sentinel.id] = command_key
-            self.store.add_event(EventLog(category="HARDWARE",message=f"{sentinel.name} acknowledged {command_key}"))
+            self._send_hardware_state(facility, sentinel, state, source, force=force)
         self.store.save_facility(facility)
         return facility
+
+    def poll_hardware(self):
+        """Bounded connection maintenance; safe to call from a periodic background task."""
+        facility = self.facility
+        if facility is None:
+            return
+        for sentinel in facility.sentinels:
+            if not sentinel.ip_address:
+                continue
+            try:
+                self.heartbeat(sentinel.id)
+            except Exception:
+                # heartbeat() records the failure; camera/AI processing must continue.
+                continue
 
     @synchronized
     def clear_live_data(self):
@@ -370,5 +472,7 @@ class CrowdGuardService:
         self.camera_frames.clear()
         self.risk_history.clear()
         self.risk_timeline.clear()
+        self.decision_engine.reset_state()
+        self.queue_estimator.reset()
         self.store.clear_events()
         return self.snapshot()

@@ -15,11 +15,28 @@ class Response:
 
 def test_esp32_command_requires_acknowledgement(monkeypatch):
     sentinel=Sentinel(id="s1",name="Unit",junction_id="j1",device_id="cg-01",ip_address="192.168.1.80")
-    monkeypatch.setattr("backend.hardware.esp32_client.urlopen",lambda request,timeout:Response({"acknowledged":True,"hardware_state":{"arm_state":"BLOCK_ROUTE","display_message":"USE EXIT B","audio":"PLEASE_USE_EXIT_B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}}))
-    state=ESP32Client().set_state(sentinel,{"action":"REDIRECT_TO_EXIT","recommended_exit_id":"exit_b"})
-    assert state.arm_state=="BLOCK_ROUTE"
+    def response(request, timeout):
+        payload = json.loads(request.data)
+        return Response({"acknowledged":True,"device_id":"cg-01","state":payload["state"],"command_id":payload["command_id"],"hardware_state":{"arm_state":"REDIRECT_B","display_message":"USE EXIT B","audio":"PLEASE_USE_EXIT_B","audio_state":"PLAYING","led_routes":{"exit_a":"RED_RESTRICTED","exit_b":"GREEN_GUIDANCE"}}})
+    monkeypatch.setattr("backend.hardware.esp32_client.urlopen",response)
+    state=ESP32Client().set_state(sentinel,{"action":"REDIRECT_B"})
+    assert state.arm_state=="REDIRECT_B"
     assert state.led_routes["exit_b"]=="GREEN_GUIDANCE"
     assert sentinel.command_acknowledged is True
+
+
+def test_acknowledgement_timeout_has_bounded_idempotent_retries(monkeypatch):
+    sentinel=Sentinel(id="s1",name="Unit",junction_id="j1",device_id="cg-01",ip_address="192.168.1.80")
+    payloads=[]
+    def no_ack(request, timeout):
+        payloads.append(json.loads(request.data))
+        return Response({"acknowledged":False})
+    monkeypatch.setattr("backend.hardware.esp32_client.urlopen",no_ack)
+    with pytest.raises(ConnectionError, match="after 2 attempts"):
+        ESP32Client(max_attempts=2).set_state(sentinel,{"action":"BOTH_BUSY","command_id":"logical-1"})
+    assert len(payloads)==2
+    assert {payload["command_id"] for payload in payloads}=={"logical-1"}
+    assert sentinel.command_acknowledged is False
 
 
 def test_esp32_heartbeat_verifies_device_id(monkeypatch):

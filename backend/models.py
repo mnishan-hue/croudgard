@@ -102,8 +102,8 @@ class Junction(BaseModel):
 
 
 class HardwareState(BaseModel):
-    arm_state: str = "NORMAL"
-    display_message: str = "THANK YOU VISIT AGAIN"
+    arm_state: str = "NEUTRAL"
+    display_message: str = "THANK YOU"
     audio: str = "NONE"
     audio_state: str = "IDLE"
     led_routes: dict[str, str] = Field(default_factory=dict)
@@ -120,7 +120,11 @@ class Sentinel(BaseModel):
     connected: bool = False
     last_heartbeat: str | None = None
     last_command: str | None = None
+    desired_state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"] = "NEUTRAL"
+    acknowledged_state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET"] | None = None
+    last_command_id: str | None = None
     command_acknowledged: bool = False
+    last_error: str | None = None
     latency_ms: float | None = None
     hardware_state: HardwareState = Field(default_factory=HardwareState)
 
@@ -164,6 +168,7 @@ class Intervention(BaseModel):
 
 class Decision(BaseModel):
     action: Literal["NORMAL", "REDIRECT_TO_EXIT", "CRITICAL", "RECOVERY", "RESET"]
+    route_state: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY"] = "NEUTRAL"
     recommended_exit_id: str | None = None
     affected_zone_id: str | None = None
     reason: str
@@ -203,6 +208,10 @@ class LiveSnapshot(BaseModel):
     reporting_camera_ids: list[str] = Field(default_factory=list)
     streaming_camera_ids: list[str] = Field(default_factory=list)
     exit_coverage_complete: bool = False
+    queue_level: Literal["LOW", "MODERATE", "HIGH", "VERY HIGH"] | None = None
+    queue_trend: Literal["RISING", "STABLE", "FALLING"] | None = None
+    estimated_wait: float | None = None
+    estimated_wait_label: str | None = None
 
 
 class PersonCountObservation(BaseModel):
@@ -245,7 +254,7 @@ class ComputerVisionObservation(BaseModel):
 
 
 class ManualControlRequest(BaseModel):
-    action: Literal["NORMAL", "REDIRECT_TO_EXIT", "CRITICAL", "RESET"]
+    action: Literal["NEUTRAL", "REDIRECT_A", "REDIRECT_B", "BOTH_BUSY", "RESET", "NORMAL", "REDIRECT_TO_EXIT", "CRITICAL"]
     recommended_exit_id: str | None = None
     sentinel_id: str | None = None
 

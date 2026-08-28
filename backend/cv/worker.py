@@ -74,6 +74,7 @@ class FramePublisher:
 
 def open_capture(cv2, source, width: int, height: int):
     capture = cv2.VideoCapture(source)
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return capture
@@ -93,7 +94,7 @@ def run(args):
     extractor = CrowdMetricExtractor(args.counting_line_y, density_count_capacity=args.density_count_capacity)
     publisher = None if args.no_stream else FramePublisher(f"{args.api.rstrip('/')}/cameras/{args.camera_id}/frame")
     if publisher: publisher.start()
-    frame_index = 0; last_report = 0.0; last_stream = 0.0; last_frame = time.perf_counter(); fps = 0.0
+    frame_index = 0; last_report = 0.0; last_stream = 0.0; last_frame = time.perf_counter(); last_inference = 0.0; fps = 0.0
     consecutive_read_failures = 0
     try:
         while True:
@@ -114,7 +115,12 @@ def run(args):
             consecutive_read_failures = 0
             frame_index += 1
             if frame_index % args.frame_skip: continue
-            now = time.perf_counter(); elapsed = max(now-last_frame, 1e-3); last_frame = now; fps = fps*.8 + (1/elapsed)*.2
+            now = time.perf_counter()
+            inference_interval = 1 / args.inference_fps
+            if now - last_inference < inference_interval:
+                continue
+            last_inference = now
+            elapsed = max(now-last_frame, 1e-3); last_frame = now; fps = fps*.8 + (1/elapsed)*.2
             result = model.track(frame, persist=True, tracker="bytetrack.yaml", classes=[0], conf=args.confidence, imgsz=args.image_size, verbose=False)[0]
             detections=[]
             if result.boxes is not None and result.boxes.id is not None:
@@ -151,13 +157,13 @@ def main():
     parser=argparse.ArgumentParser(description="CrowdGuard YOLO + ByteTrack camera worker")
     parser.add_argument("--camera-id", required=True); parser.add_argument("--source", required=True); parser.add_argument("--api", default="http://127.0.0.1:8000/api")
     parser.add_argument("--model", default="yolo11n.pt"); parser.add_argument("--image-size", type=int, default=640); parser.add_argument("--confidence", type=float, default=.35)
-    parser.add_argument("--frame-skip", type=int, default=2); parser.add_argument("--report-interval", type=float, default=.5); parser.add_argument("--width", type=int, default=1280); parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--frame-skip", type=int, default=1); parser.add_argument("--inference-fps", type=float, default=4); parser.add_argument("--report-interval", type=float, default=.5); parser.add_argument("--width", type=int, default=1280); parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--counting-line-y", type=float); parser.add_argument("--density-count-capacity", type=int, default=30)
     parser.add_argument("--max-read-failures", type=int, default=10); parser.add_argument("--reconnect-delay", type=float, default=2)
     parser.add_argument("--stream-fps", type=float, default=4); parser.add_argument("--stream-width", type=int, default=720); parser.add_argument("--jpeg-quality", type=int, default=70); parser.add_argument("--no-stream", action="store_true"); parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
-    if args.frame_skip < 1 or args.report_interval <= 0 or args.max_read_failures < 1 or args.reconnect_delay < 0:
-        parser.error("frame skip, report interval, read failures, and reconnect delay must be valid positive values")
+    if args.frame_skip < 1 or not 2 <= args.inference_fps <= 5 or args.report_interval <= 0 or args.max_read_failures < 1 or args.reconnect_delay < 0:
+        parser.error("frame skip/report timing must be positive and inference FPS must be between 2 and 5")
     if args.counting_line_y is not None and not 0 <= args.counting_line_y <= 1:
         parser.error("--counting-line-y must be between 0 and 1")
     if args.density_count_capacity < 1:

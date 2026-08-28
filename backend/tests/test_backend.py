@@ -229,7 +229,7 @@ def test_junction_and_sentinel_crud(tmp_path):
 def test_automatic_control_and_intervention_effectiveness(tmp_path):
     api=client(tmp_path)
     assert api.post("/api/control/auto",json={"enabled":False}).json()["automatic_control"] is False
-    assert api.post("/api/control/auto",json={"enabled":True}).status_code==422
+    assert api.post("/api/control/auto",json={"enabled":True}).status_code==200
     for _ in range(3): api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_a","classification":"HIGH_CONGESTION","confidence":.95})
     active=api.post("/api/ai/crowd-observation",json={"camera_id":"cam_exit_b","classification":"LOW_OR_EMPTY","confidence":.95}).json()["snapshot"]
     assert active["intervention"]["status"]=="ACTIVE"
@@ -337,6 +337,32 @@ def test_demo_video_control_validates_camera_scope(tmp_path):
         "/api/demo/video-control",
         json={"action": "PAUSE", "camera_ids": ["missing"]},
     ).status_code == 422
+
+
+def test_single_video_restart_does_not_clear_other_camera_state(tmp_path):
+    api = client(tmp_path)
+    observation = {
+        "people_count": 8,
+        "tracked_people": 8,
+        "detection_confidence": .9,
+        "fps": 4,
+        "density_score": 50,
+        "occupied_area_ratio": .25,
+        "congestion_score": 55,
+        "risk_score": 58,
+        "trend": "STABLE",
+    }
+    for camera_id in ("cam_main", "cam_exit_a"):
+        assert api.post("/api/ai/cv-observation", json={**observation, "camera_id": camera_id}).status_code == 200
+    restarted = api.post(
+        "/api/demo/video-control",
+        json={"action": "RESTART", "camera_ids": ["cam_main"]},
+    )
+    assert restarted.status_code == 200
+    snapshot = restarted.json()["snapshot"]
+    assert "cam_main" not in snapshot["reporting_camera_ids"]
+    assert "cam_exit_a" in snapshot["reporting_camera_ids"]
+    assert snapshot["risk_history"]
     assert api.post(
         "/api/demo/video-control",
         json={

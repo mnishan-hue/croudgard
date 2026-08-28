@@ -139,7 +139,9 @@ function adapt(snapshot: BackendSnapshot): DashboardState {
       aiEngine: hasData ? "CAMERA AI · REPORTING" : "CAMERA AI · WAITING",
       esp32: f.sentinels.some((item) => item.connected)
         ? "CONNECTED"
-        : "NOT CONFIGURED",
+        : f.sentinels.some((item) => item.ip_address)
+          ? "DISCONNECTED"
+          : "NOT CONFIGURED",
       emergencyStatus:
         hasData && snapshot.prediction.risk >= 90
           ? "CRITICAL CROWD RISK"
@@ -169,8 +171,16 @@ export function SentinelProvider({ children }: { children: ReactNode }) {
   }, []);
   useEffect(() => {
     void refresh();
-    return connectSentinelSocket<BackendSnapshot>(setSnapshot, setConnection);
+    return connectSentinelSocket<BackendSnapshot>((next) => {
+      setSnapshot(next);
+      setError(null);
+    }, setConnection);
   }, [refresh]);
+  useEffect(() => {
+    if (connection === "open") return;
+    const fallback = window.setInterval(() => void refresh(), 3_000);
+    return () => window.clearInterval(fallback);
+  }, [connection, refresh]);
   const selectFacility = useCallback(async (id: string) => {
     const next = await apiFetch<BackendSnapshot>(`/facilities/${id}/activate`, {
       method: "POST",

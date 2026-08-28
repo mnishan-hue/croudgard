@@ -165,7 +165,11 @@ function CameraCard({
         <span
           className={`absolute left-3 top-3 rounded-full border px-2 py-1 text-[9px] ${online ? "border-secondary/40 bg-secondary/10 text-secondary" : "border-destructive/40 bg-destructive/10 text-destructive"}`}
         >
-          {reporting ? "Reporting live" : online ? "Waiting for worker" : "Unavailable"}
+          {reporting
+            ? "Reporting live"
+            : online
+              ? "Waiting for worker"
+              : "Unavailable"}
         </span>
         <span className="absolute right-3 top-3 rounded-full border border-border bg-background/80 px-2 py-1 text-[9px] text-primary">
           Live camera AI
@@ -195,17 +199,21 @@ function CameraCard({
         <div className="mt-4 grid grid-cols-3 gap-px bg-border">
           <Metric
             icon={Users}
-            label="PEOPLE"
-            value={reporting?String(metrics?.metrics.people_count ?? 0):"—"}
+            label="EST. DETECTIONS"
+            value={reporting ? String(metrics?.metrics.people_count ?? 0) : "—"}
           />
           <Metric
             icon={Signal}
             label="DENSITY"
-            value={reporting&&metrics ? `${Math.round(metrics.metrics.density)}` : "—"}
+            value={
+              reporting && metrics
+                ? `${Math.round(metrics.metrics.density)}`
+                : "—"
+            }
           />
           <Metric
             label="RISK"
-            value={reporting&&metrics ? `${Math.round(metrics.risk)}` : "—"}
+            value={reporting && metrics ? `${Math.round(metrics.risk)}` : "—"}
           />
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">

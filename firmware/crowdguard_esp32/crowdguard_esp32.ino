@@ -16,37 +16,43 @@ const char* MDNS_NAME = "crowdguard-esp32";
 
 WebServer server(80);
 
-String armState = "NORMAL";
-String displayMessage = "THANK YOU VISIT AGAIN";
+String currentState = "NEUTRAL";
+String lastCommandId = "";
+String armState = "NEUTRAL";
+String displayMessage = "THANK YOU";
 String audioState = "IDLE";
 String audioCommand = "NONE";
-String exitAState = "NORMAL";
-String exitBState = "NORMAL";
+String exitAState = "NEUTRAL";
+String exitBState = "NEUTRAL";
+unsigned long lastWifiAttempt = 0;
+bool mdnsStarted = false;
 
-void applyHardwareState(const String& command, const String& exitId) {
-  if (command == "REDIRECT_TO_EXIT") {
-    armState = "GUIDANCE";
-    displayMessage = exitId == "exit_a" ? "PLEASE USE EXIT A" : "PLEASE USE EXIT B";
-    audioCommand = exitId == "exit_a" ? "PLEASE_USE_EXIT_A" : "PLEASE_USE_EXIT_B";
+void applyHardwareState(const String& state) {
+  currentState = state;
+  if (state == "REDIRECT_A" || state == "REDIRECT_B") {
+    const bool useExitA = state == "REDIRECT_A";
+    armState = state;
+    displayMessage = useExitA ? "USE EXIT A" : "USE EXIT B";
+    audioCommand = useExitA ? "PLEASE_USE_EXIT_A" : "PLEASE_USE_EXIT_B";
     audioState = "PLAYING";
-    exitAState = exitId == "exit_a" ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
-    exitBState = exitId == "exit_b" ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
+    exitAState = useExitA ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
+    exitBState = useExitA ? "RED_RESTRICTED" : "GREEN_GUIDANCE";
     digitalWrite(LED_BUILTIN, HIGH);
-  } else if (command == "CRITICAL") {
-    armState = "SAFE_NEUTRAL";
-    displayMessage = "PLEASE WALK SLOWLY / MAINTAIN SPACE";
+  } else if (state == "BOTH_BUSY") {
+    armState = "NEUTRAL";
+    displayMessage = "PLEASE WALK SLOWLY";
     audioCommand = "PLEASE_WALK_SLOWLY";
     audioState = "PLAYING";
     exitAState = "CAUTION";
     exitBState = "CAUTION";
     digitalWrite(LED_BUILTIN, HIGH);
   } else {
-    armState = "NORMAL";
-    displayMessage = "THANK YOU VISIT AGAIN";
+    armState = "NEUTRAL";
+    displayMessage = "THANK YOU";
     audioCommand = "NONE";
     audioState = "IDLE";
-    exitAState = "NORMAL";
-    exitBState = "NORMAL";
+    exitAState = "NEUTRAL";
+    exitBState = "NEUTRAL";
     digitalWrite(LED_BUILTIN, LOW);
   }
 }
@@ -73,6 +79,8 @@ void handleStatus() {
   response["status"] = "ready";
   response["ip_address"] = WiFi.localIP().toString();
   response["uptime_ms"] = millis();
+  response["state"] = currentState;
+  response["last_command_id"] = lastCommandId;
   addHardwareState(response["hardware_state"].to<JsonObject>());
   sendJson(200, response);
 }
@@ -96,26 +104,27 @@ void handleCommand() {
     return;
   }
 
-  const String command = request["command"] | "NORMAL";
-  const String exitId = request["recommended_exit_id"] | "";
+  const String state = request["state"] | "";
+  const String commandId = request["command_id"] | "";
   const bool valid =
-      command == "NORMAL" || command == "REDIRECT_TO_EXIT" ||
-      command == "CRITICAL" || command == "RESET";
-  if (!valid) {
-    server.send(422, "application/json", "{\"detail\":\"Unsupported command\"}");
-    return;
-  }
-  if (command == "REDIRECT_TO_EXIT" && exitId != "exit_a" && exitId != "exit_b") {
-    server.send(422, "application/json", "{\"detail\":\"Unknown exit ID\"}");
+      state == "NEUTRAL" || state == "REDIRECT_A" || state == "REDIRECT_B" ||
+      state == "BOTH_BUSY" || state == "RESET";
+  if (!valid || commandId.length() == 0) {
+    server.send(422, "application/json", "{\"detail\":\"Unsupported state or missing command_id\"}");
     return;
   }
 
-  applyHardwareState(command, exitId);
+  // A retry carries the same ID. Acknowledge it without replaying servo/audio.
+  if (commandId != lastCommandId) {
+    applyHardwareState(state);
+    lastCommandId = commandId;
+  }
 
   JsonDocument response;
   response["acknowledged"] = true;
   response["device_id"] = DEVICE_ID;
-  response["command"] = command;
+  response["state"] = currentState;
+  response["command_id"] = commandId;
   addHardwareState(response["hardware_state"].to<JsonObject>());
   sendJson(200, response);
 }
@@ -127,30 +136,22 @@ void handleNotFound() {
   sendJson(404, response);
 }
 
-void connectWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  const unsigned long started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 20000) {
-    delay(300);
-    Serial.print(".");
+void maintainWifi() {
+  if (WiFi.status() != WL_CONNECTED && millis() - lastWifiAttempt >= 5000) {
+    lastWifiAttempt = millis();
+    Serial.println("Connecting to Wi-Fi...");
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
-  Serial.println();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Wi-Fi connection failed. Restarting in 5 seconds.");
-    delay(5000);
-    ESP.restart();
-  }
-
-  Serial.print("CrowdGuard ESP32 address: http://");
-  Serial.println(WiFi.localIP());
-  if (MDNS.begin(MDNS_NAME)) {
+  if (WiFi.status() == WL_CONNECTED && !mdnsStarted) {
+    Serial.print("CrowdGuard ESP32 address: http://");
+    Serial.println(WiFi.localIP());
+    mdnsStarted = MDNS.begin(MDNS_NAME);
+    if (mdnsStarted) {
     Serial.print("mDNS address: http://");
     Serial.print(MDNS_NAME);
     Serial.println(".local");
+    }
   }
 }
 
@@ -159,7 +160,10 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
-  connectWifi();
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  lastWifiAttempt = millis() - 5000;
+  maintainWifi();
 
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/command", HTTP_POST, handleCommand);
@@ -173,7 +177,7 @@ void setup() {
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    connectWifi();
+    maintainWifi();
   }
   server.handleClient();
   delay(2);

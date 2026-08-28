@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "wouter";
 import {
   ArrowRight,
@@ -7,7 +7,7 @@ import {
   Cpu,
   ShieldAlert,
   Sparkles,
-  Users,
+  TrendingUp,
 } from "lucide-react";
 import { LiveCameraGrid } from "@/components/live-camera-grid";
 import { MapPanel, PageIntro, Panel } from "@/components/sentinel-shell";
@@ -15,32 +15,15 @@ import { SourceControl } from "@/components/source-control";
 import { useBrowserCameras } from "@/hooks/use-browser-cameras";
 import { useSentinel } from "@/hooks/use-sentinel";
 import { apiFetch } from "@/services/api";
-import type { BackendSnapshot, Exit } from "@/types/sentinel";
+import type { BackendSnapshot, Exit, Zone } from "@/types/sentinel";
 
 export default function Operations() {
   const { snapshot, refresh, error } = useSentinel();
   const cameraStation = useBrowserCameras();
   const [changingAuto, setChangingAuto] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
 
   const isLocalRunning = cameraStation.status === "RUNNING";
-
-  const totalPeopleDisplay = useMemo(() => {
-    const localMetrics = Object.values(cameraStation.metrics);
-    if (isLocalRunning && localMetrics.length) {
-      const readyMetrics = localMetrics.filter((m) => !m.isWarmingUp);
-      if (!readyMetrics.length) return "AI warming up";
-      const sum = readyMetrics.reduce((acc, m) => acc + m.peopleCount, 0);
-      return String(sum);
-    }
-    if (snapshot?.reporting_camera_ids?.length) {
-      const sum = snapshot.facility.zones.reduce(
-        (acc, zone) => acc + zone.metrics.people_count,
-        0,
-      );
-      return String(sum);
-    }
-    return "—";
-  }, [cameraStation.metrics, isLocalRunning, snapshot]);
 
   if (!snapshot) {
     return (
@@ -70,22 +53,27 @@ export default function Operations() {
   const connectedSentinels = facility.sentinels.filter(
     (sentinel) => sentinel.connected,
   ).length;
-  const risk = Math.round(prediction.risk);
-  const monitoring = snapshot.camera_ai_active || isLocalRunning;
-  const activeCameraCount = Math.max(
-    snapshot.reporting_camera_ids.length,
-    Object.keys(cameraStation.metrics).length,
+  const hardwareConfigured = facility.sentinels.some(
+    (sentinel) => sentinel.ip_address,
   );
+  const monitoring = snapshot.camera_ai_active || isLocalRunning;
 
   async function toggleAutomatic() {
     if (!snapshot) return;
     setChangingAuto(true);
+    setControlError(null);
     try {
       await apiFetch<BackendSnapshot>("/control/auto", {
         method: "POST",
         body: JSON.stringify({ enabled: !snapshot.automatic_control }),
       });
       await refresh();
+    } catch (reason) {
+      setControlError(
+        reason instanceof Error
+          ? reason.message
+          : "Control mode could not be updated.",
+      );
     } finally {
       setChangingAuto(false);
     }
@@ -96,7 +84,7 @@ export default function Operations() {
       <PageIntro
         eyebrow="Live operations"
         title="See the crowd. Act quickly."
-        description="Cameras, people count, exit safety and ESP32 guidance are kept together on one clear operator screen."
+        description="Calm queue guidance, exit conditions and ESP32 status on one operator screen."
         action={
           <div className="flex items-center gap-2">
             <span
@@ -112,40 +100,50 @@ export default function Operations() {
 
       <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
-          icon={Users}
-          label="People Index (Total)"
-          value={totalPeopleDisplay}
-          detail={
-            monitoring ? "Sum of all monitored zones" : "Start a camera source"
-          }
+          icon={ShieldAlert}
+          label="Main Area queue"
+          value={monitoring ? (snapshot.queue_level ?? "Analyzing") : "—"}
+          detail="Smoothed queue condition"
           tone="teal"
         />
         <Metric
-          icon={ShieldAlert}
-          label="Current risk"
-          value={monitoring ? `${risk}%` : "—"}
-          detail={
-            monitoring
-              ? humanize(prediction.crowd_state)
-              : "No live classification"
-          }
-          tone={risk >= 70 ? "red" : risk >= 40 ? "amber" : "teal"}
+          icon={TrendingUp}
+          label="Main Area trend"
+          value={monitoring ? (snapshot.queue_trend ?? "Analyzing") : "—"}
+          detail="Sustained recent movement"
+          tone={snapshot.queue_trend === "RISING" ? "amber" : "teal"}
         />
         <Metric
           icon={Camera}
-          label="Camera AI"
-          value={`${activeCameraCount}/${facility.cameras.filter((camera) => camera.enabled).length}`}
-          detail="3 Sources (Main, Exit A, Exit B)"
-          tone={activeCameraCount ? "teal" : "amber"}
+          label="Estimated wait"
+          value={
+            monitoring ? (snapshot.estimated_wait_label ?? "Analyzing") : "—"
+          }
+          detail="Current crowd and exit-flow conditions"
+          tone={
+            snapshot.queue_level === "VERY HIGH"
+              ? "red"
+              : snapshot.queue_level === "HIGH"
+                ? "amber"
+                : "teal"
+          }
         />
         <Metric
           icon={Cpu}
           label="ESP32"
-          value={connectedSentinels ? "Connected" : "Setup needed"}
+          value={
+            connectedSentinels
+              ? "Connected"
+              : hardwareConfigured
+                ? "Disconnected"
+                : "Not configured"
+          }
           detail={
             connectedSentinels
               ? `${connectedSentinels} field unit online`
-              : "Open Devices to connect"
+              : hardwareConfigured
+                ? "AI remains active; state will resync"
+                : "Configure a device when ready"
           }
           tone={connectedSentinels ? "teal" : "amber"}
         />
@@ -193,17 +191,39 @@ export default function Operations() {
                   <h3 className="text-base font-semibold">
                     {!monitoring
                       ? "Connect cameras to begin"
-                      : decision.action === "CRITICAL"
-                        ? "Both exits crowded — walk slowly"
-                        : recommendedExit
-                          ? `Guide people toward ${recommendedExit.name}`
-                          : "Both exits clear"}
+                      : decisionMessage(decision.route_state)}
                   </h3>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {decision.reason}
                   </p>
                 </div>
               </div>
+            </div>
+
+            <div className="mt-4 grid gap-px bg-border sm:grid-cols-3">
+              <DecisionDatum
+                label="System decision"
+                value={monitoring ? humanize(decision.route_state) : "Waiting"}
+              />
+              <DecisionDatum
+                label="Recommended exit"
+                value={
+                  monitoring
+                    ? (recommendedExit?.name ??
+                      (decision.route_state === "NEUTRAL"
+                        ? "Both clear"
+                        : "None"))
+                    : "Waiting"
+                }
+              />
+              <DecisionDatum
+                label="Intervention"
+                value={
+                  monitoring
+                    ? humanize(snapshot.intervention.status)
+                    : "Waiting"
+                }
+              />
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -213,6 +233,21 @@ export default function Operations() {
                   <ExitCard
                     key={exit.id}
                     exit={exit}
+                    zone={facility.zones.find(
+                      (zone) => zone.id === exit.zone_id,
+                    )}
+                    reporting={
+                      facility.zones
+                        .find((zone) => zone.id === exit.zone_id)
+                        ?.camera_ids.some(
+                          (cameraId) =>
+                            snapshot.reporting_camera_ids.includes(cameraId) ||
+                            Boolean(
+                              cameraStation.metrics[cameraId] &&
+                              !cameraStation.metrics[cameraId].isWarmingUp,
+                            ),
+                        ) ?? false
+                    }
                     selected={exit.id === decision.recommended_exit_id}
                   />
                 ))}
@@ -224,7 +259,7 @@ export default function Operations() {
                   Automatic ESP32 guidance
                 </div>
                 <div className="mt-0.5 text-[10px] text-muted-foreground">
-                  Requires a connected device and current exit cameras.
+                  AI decisions continue if the ESP32 is temporarily offline.
                 </div>
               </div>
               <button
@@ -233,10 +268,7 @@ export default function Operations() {
                     ? "button-primary"
                     : "button-secondary"
                 }
-                disabled={
-                  changingAuto ||
-                  (!snapshot.automatic_control && connectedSentinels === 0)
-                }
+                disabled={changingAuto}
                 onClick={() => void toggleAutomatic()}
               >
                 {changingAuto
@@ -246,6 +278,11 @@ export default function Operations() {
                     : "Enable automatic"}
               </button>
             </div>
+            {controlError && (
+              <p role="alert" className="mt-3 text-[11px] text-destructive">
+                {controlError}
+              </p>
+            )}
           </div>
         </Panel>
 
@@ -308,7 +345,7 @@ function Metric({
   detail,
   tone,
 }: {
-  icon: typeof Users;
+  icon: typeof ShieldAlert;
   label: string;
   value: string;
   detail: string;
@@ -336,8 +373,19 @@ function Metric({
   );
 }
 
-function ExitCard({ exit, selected }: { exit: Exit; selected: boolean }) {
-  const safe = exit.status === "AVAILABLE";
+function ExitCard({
+  exit,
+  zone,
+  reporting,
+  selected,
+}: {
+  exit: Exit;
+  zone?: Zone;
+  reporting: boolean;
+  selected: boolean;
+}) {
+  const level = reporting ? crowdLevel(exit.risk) : "WAITING";
+  const safe = level === "LOW";
   return (
     <div
       className={`rounded-lg border p-3 ${selected ? "border-secondary bg-secondary/5" : "border-border bg-background"}`}
@@ -347,17 +395,15 @@ function ExitCard({ exit, selected }: { exit: Exit; selected: boolean }) {
         <span
           className={`rounded-full px-2 py-1 text-[9px] ${safe ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
         >
-          {humanize(exit.status)}
+          {level}
         </span>
       </div>
       <div className="mt-3 flex items-end justify-between">
         <div>
           <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
-            Risk
+            Crowd level
           </div>
-          <div className="mt-1 text-lg font-semibold">
-            {Math.round(exit.risk)}%
-          </div>
+          <div className="mt-1 text-lg font-semibold">{level}</div>
         </div>
         {selected && (
           <span className="text-[9px] font-medium text-secondary">
@@ -365,8 +411,41 @@ function ExitCard({ exit, selected }: { exit: Exit; selected: boolean }) {
           </span>
         )}
       </div>
+      <div className="mt-2 text-[10px] text-muted-foreground">
+        Trend:{" "}
+        <span className="font-medium text-foreground">
+          {zone?.metrics.trend === "UNAVAILABLE" || !zone
+            ? "Waiting"
+            : zone.metrics.trend}
+        </span>
+      </div>
     </div>
   );
+}
+
+function DecisionDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-background p-3">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-sm font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function crowdLevel(risk: number) {
+  if (risk >= 75) return "VERY HIGH";
+  if (risk >= 55) return "HIGH";
+  if (risk >= 35) return "MODERATE";
+  return "LOW";
+}
+
+function decisionMessage(state: BackendSnapshot["decision"]["route_state"]) {
+  if (state === "REDIRECT_A") return "USE EXIT A";
+  if (state === "REDIRECT_B") return "USE EXIT B";
+  if (state === "BOTH_BUSY") return "PLEASE WALK SLOWLY";
+  return "THANK YOU";
 }
 
 function humanize(value: string) {

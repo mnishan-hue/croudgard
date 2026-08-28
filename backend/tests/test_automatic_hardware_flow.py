@@ -49,7 +49,9 @@ def restart_analysis(api):
     assert response.status_code == 200
 
 
-def test_automatic_decisions_reach_mock_esp32_for_all_four_scenarios(tmp_path):
+def test_automatic_decisions_reach_mock_esp32_for_all_four_scenarios(tmp_path, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("backend.decision.time.monotonic", lambda: clock[0])
     api = client(tmp_path)
     sentinel = api.get("/api/system").json()["facility"]["sentinels"][0]
     sentinel_id = sentinel["id"]
@@ -64,14 +66,16 @@ def test_automatic_decisions_reach_mock_esp32_for_all_four_scenarios(tmp_path):
     # Both exits clear.
     publish_cv(api, "cam_exit_a", 20)
     publish_cv(api, "cam_exit_b", 20)
-    assert hardware_state(api)["display_message"] == "THANK YOU VISIT AGAIN"
+    assert hardware_state(api)["display_message"] == "THANK YOU"
 
     # Exit A builds up; send people to Exit B.
     restart_analysis(api)
     publish_cv(api, "cam_exit_b", 18)
     publish_cv(api, "cam_exit_a", 85, repeats=3)
+    clock[0] += 6
+    publish_cv(api, "cam_exit_a", 85)
     state = hardware_state(api)
-    assert state["display_message"] == "PLEASE USE EXIT B"
+    assert state["display_message"] == "USE EXIT B"
     assert state["led_routes"] == {
         "exit_a": "RED_RESTRICTED",
         "exit_b": "GREEN_GUIDANCE",
@@ -86,14 +90,16 @@ def test_automatic_decisions_reach_mock_esp32_for_all_four_scenarios(tmp_path):
         },
     )
     assert stopped.status_code == 200
-    assert hardware_state(api)["display_message"] == "THANK YOU VISIT AGAIN"
+    assert hardware_state(api)["display_message"] == "THANK YOU"
 
     # Exit B builds up; send people to Exit A.
     restart_analysis(api)
     publish_cv(api, "cam_exit_a", 18)
     publish_cv(api, "cam_exit_b", 85, repeats=3)
+    clock[0] += 6
+    publish_cv(api, "cam_exit_b", 85)
     state = hardware_state(api)
-    assert state["display_message"] == "PLEASE USE EXIT A"
+    assert state["display_message"] == "USE EXIT A"
     assert state["led_routes"] == {
         "exit_a": "GREEN_GUIDANCE",
         "exit_b": "RED_RESTRICTED",
@@ -104,7 +110,7 @@ def test_automatic_decisions_reach_mock_esp32_for_all_four_scenarios(tmp_path):
     publish_cv(api, "cam_exit_a", 85, repeats=3)
     publish_cv(api, "cam_exit_b", 85, repeats=3)
     state = hardware_state(api)
-    assert state["display_message"] == "PLEASE WALK SLOWLY / MAINTAIN SPACE"
+    assert state["display_message"] == "PLEASE WALK SLOWLY"
     assert state["audio"] == "PLEASE_WALK_SLOWLY"
     assert state["led_routes"] == {
         "exit_a": "CAUTION",

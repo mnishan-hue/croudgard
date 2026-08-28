@@ -16,8 +16,7 @@ import { apiFetch } from "@/services/api";
 import type { BackendSnapshot, Sentinel } from "@/types/sentinel";
 
 type Pending = {
-  action: "NORMAL" | "REDIRECT_TO_EXIT" | "CRITICAL" | "RESET";
-  exit?: string;
+  action: "NEUTRAL" | "REDIRECT_A" | "REDIRECT_B" | "BOTH_BUSY" | "RESET";
   label: string;
 };
 
@@ -107,16 +106,17 @@ export default function Devices() {
 
   async function sendCommand(pending: Pending) {
     try {
-      await apiFetch<BackendSnapshot>("/control/manual", {
+      const result = await apiFetch<BackendSnapshot>("/control/manual", {
         method: "POST",
         body: JSON.stringify({
           action: pending.action,
-          recommended_exit_id: pending.exit,
           sentinel_id: sentinel?.id,
         }),
       });
       setMessage({
-        text: `${pending.label} was acknowledged by the ESP32.`,
+        text: result.facility.sentinels[0]?.command_acknowledged
+          ? `${pending.label} was acknowledged by the ESP32.`
+          : `${pending.label} is preserved and will be sent when the ESP32 reconnects.`,
         ok: true,
       });
       setConfirm(null);
@@ -139,7 +139,7 @@ export default function Devices() {
           <span
             className={`rounded-full px-3 py-1.5 text-[10px] font-medium ${sentinel?.connected ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"}`}
           >
-            {sentinel?.connected ? "ESP32 connected" : "Setup required"}
+            {sentinel?.connected ? "ESP32 connected" : "ESP32 disconnected"}
           </span>
         }
       />
@@ -321,6 +321,7 @@ export default function Devices() {
                 label="Last command"
                 value={sentinel.last_command ?? "None"}
               />
+              <State label="Desired state" value={sentinel.desired_state} />
               <State
                 label="Acknowledgement"
                 value={
@@ -345,52 +346,49 @@ export default function Devices() {
                 label="Automatic mode"
                 value={snapshot?.automatic_control ? "Enabled" : "Disabled"}
               />
+              {sentinel.last_error && (
+                <State label="Last error" value={sentinel.last_error} />
+              )}
             </div>
           </Panel>
 
           <Panel
             title="Manual test controls"
-            eyebrow="AVAILABLE AFTER HEARTBEAT"
+            eyebrow="COMMANDS ARE PRESERVED WHILE DISCONNECTED"
             className="mt-5 rounded-xl"
           >
-            <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-5">
               <Control
-                label="Normal guidance"
+                label="Neutral"
                 icon={RotateCcw}
-                disabled={!sentinel.connected}
                 onClick={() =>
-                  setConfirm({ action: "NORMAL", label: "Normal guidance" })
+                  setConfirm({ action: "NEUTRAL", label: "Neutral" })
                 }
               />
-              {facility.exits
-                .filter((exit) => exit.enabled)
-                .map((exit) => (
-                  <Control
-                    key={exit.id}
-                    label={`Guide to ${exit.name}`}
-                    icon={RadioTower}
-                    disabled={!sentinel.connected}
-                    onClick={() =>
-                      setConfirm({
-                        action: "REDIRECT_TO_EXIT",
-                        exit: exit.id,
-                        label: `Guide to ${exit.name}`,
-                      })
-                    }
-                  />
-                ))}
               <Control
-                label="Critical response"
-                icon={ShieldAlert}
-                disabled={!sentinel.connected}
+                label="Redirect A"
+                icon={RadioTower}
                 onClick={() =>
-                  setConfirm({ action: "CRITICAL", label: "Critical response" })
+                  setConfirm({ action: "REDIRECT_A", label: "Redirect A" })
+                }
+              />
+              <Control
+                label="Redirect B"
+                icon={RadioTower}
+                onClick={() =>
+                  setConfirm({ action: "REDIRECT_B", label: "Redirect B" })
+                }
+              />
+              <Control
+                label="Both busy"
+                icon={ShieldAlert}
+                onClick={() =>
+                  setConfirm({ action: "BOTH_BUSY", label: "Both busy" })
                 }
               />
               <Control
                 label="Reset device"
                 icon={RotateCcw}
-                disabled={!sentinel.connected}
                 onClick={() =>
                   setConfirm({ action: "RESET", label: "Device reset" })
                 }
@@ -409,7 +407,7 @@ export default function Devices() {
           <div className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-2xl">
             <ShieldAlert
               className={
-                confirm.action === "CRITICAL"
+                confirm.action === "BOTH_BUSY"
                   ? "text-destructive"
                   : "text-primary"
               }
@@ -418,8 +416,9 @@ export default function Devices() {
               Confirm {confirm.label.toLowerCase()}
             </h2>
             <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              This sends a real command to the connected ESP32 and records an
-              event.
+              The backend records this manual state. If the ESP32 is
+              disconnected, it will synchronize the state once after
+              reconnecting.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -430,7 +429,7 @@ export default function Devices() {
               </button>
               <button
                 className={
-                  confirm.action === "CRITICAL"
+                  confirm.action === "BOTH_BUSY"
                     ? "button-danger"
                     : "button-primary"
                 }
@@ -506,12 +505,12 @@ function State({ label, value }: { label: string; value: string }) {
 function Control({
   label,
   icon: Icon,
-  disabled,
+  disabled = false,
   onClick,
 }: {
   label: string;
   icon: typeof Cpu;
-  disabled: boolean;
+  disabled?: boolean;
   onClick(): void;
 }) {
   return (

@@ -31,9 +31,12 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
   );
   const demo = station.sourceMode === "DEMO_VIDEOS";
   const running = station.status === "RUNNING";
-  const busy = ["REQUESTING_PERMISSION", "LOADING_AI", "BUFFERING", "CONNECTING"].includes(
-    station.status,
-  );
+  const busy = [
+    "REQUESTING_PERMISSION",
+    "LOADING_AI",
+    "BUFFERING",
+    "CONNECTING",
+  ].includes(station.status);
   const selectedCount = enabled.filter((camera) =>
     demo
       ? Boolean(station.videoFiles[camera.id])
@@ -69,7 +72,8 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
                 </span>
                 {running && (
                   <span className="rounded-full bg-secondary/10 px-2 py-0.5 text-[9px] font-medium text-secondary">
-                    Synchronized · Offline COCO-SSD
+                    {demo ? "SOURCE: RECORDED VIDEO" : "SOURCE: LIVE CAMERA"} ·
+                    ANALYSIS: LIVE AI
                   </span>
                 )}
               </div>
@@ -240,7 +244,8 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
                         className="button-secondary text-xs"
                         onClick={() => setShowDiagnostics((prev) => !prev)}
                       >
-                        <Activity size={12} /> {showDiagnostics ? "Hide diagnostics" : "Diagnostics"}
+                        <Activity size={12} />{" "}
+                        {showDiagnostics ? "Hide diagnostics" : "Diagnostics"}
                       </button>
                     </div>
                   </div>
@@ -249,7 +254,9 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-xs">
                     <div className="flex items-center gap-2">
                       <Sliders size={14} className="text-secondary" />
-                      <span className="font-medium">Detection confidence threshold:</span>
+                      <span className="font-medium">
+                        Detection confidence threshold:
+                      </span>
                       <span className="font-mono text-secondary">
                         {Math.round(station.confidenceThreshold * 100)}%
                       </span>
@@ -262,7 +269,9 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
                         step="0.05"
                         value={station.confidenceThreshold}
                         onChange={(e) =>
-                          station.setConfidenceThreshold(parseFloat(e.target.value))
+                          station.setConfidenceThreshold(
+                            parseFloat(e.target.value),
+                          )
                         }
                         className="h-1.5 w-32 accent-secondary"
                         aria-label="Confidence threshold"
@@ -354,7 +363,9 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
                   <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
                     <Info size={14} className="text-secondary shrink-0" />
                     <span>
-                      Select demonstration videos for Main Area, Exit A, and Exit B. All 3 files will be pre-buffered and started simultaneously.
+                      Select demonstration videos for Main Area, Exit A, and
+                      Exit B. All 3 files will be pre-buffered and started
+                      simultaneously.
                     </span>
                   </div>
                   <div className="grid gap-4 md:grid-cols-3">
@@ -445,16 +456,23 @@ export function SourceControl({ cameras }: { cameras: FacilityCamera[] }) {
 
             <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/50 p-4">
               <p className="text-[10px] text-muted-foreground">
-                Offline AI runs on GPU-optimized frames; video streams play natively at full original framerate.
+                Offline AI runs on GPU-optimized frames; video streams play
+                natively at full original framerate.
               </p>
               {!running && (
                 <button
                   className="button-primary"
-                  disabled={busy || selectedCount === 0}
+                  disabled={
+                    busy ||
+                    selectedCount === 0 ||
+                    (demo && selectedCount !== enabled.length)
+                  }
                   onClick={() => void station.start(enabled)}
                 >
-                  <Play size={13} /> Start {selectedCount || ""} source
-                  {selectedCount === 1 ? "" : "s"} simultaneously
+                  <Play size={13} />{" "}
+                  {demo
+                    ? "Start All 3"
+                    : `Start ${selectedCount || ""} source${selectedCount === 1 ? "" : "s"}`}
                 </button>
               )}
             </footer>
@@ -563,10 +581,10 @@ function SourceCard({
         </div>
         <div className="text-right">
           <div className="text-sm font-semibold font-mono text-secondary">
-            {isWarmingUp ? "—" : `${metric?.peopleCount ?? 0} people`}
+            {isWarmingUp ? "—" : `${metric?.peopleCount ?? 0}`}
           </div>
           <div className="text-[9px] text-muted-foreground">
-            {metric?.fps ? `${metric.fps.toFixed(1)} AI FPS` : "AI warming up"}
+            {isWarmingUp ? "AI warming up" : "Estimated detections"}
           </div>
         </div>
       </div>
@@ -597,7 +615,10 @@ function SourceCard({
           </button>
         </div>
         <div className="text-[10px] text-muted-foreground">
-          Risk: <span className="text-foreground font-mono">{Math.round(metric?.riskScore ?? 0)}%</span>
+          Risk:{" "}
+          <span className="text-foreground font-mono">
+            {Math.round(metric?.riskScore ?? 0)}%
+          </span>
         </div>
       </div>
     </div>

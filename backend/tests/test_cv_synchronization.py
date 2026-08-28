@@ -155,7 +155,7 @@ def test_esp32_exit_preference_scenarios():
     """Validates all user-specified exit guidance and screen display scenarios."""
     engine = DecisionEngine(switch_margin=10.0, min_dwell_seconds=3.0)
 
-    # 1. Both exits free -> NORMAL -> Screen shows "THANK YOU VISIT AGAIN"
+    # 1. Both exits free -> NEUTRAL -> screen shows "THANK YOU"
     zones_free = [
         Zone(id="z_main", facility_id="f1", name="Main Area", risk=20, metrics=ZoneMetrics(people_count=5, density=15)),
         Zone(id="z_exit_a", facility_id="f1", name="Exit A Zone", risk=10, metrics=ZoneMetrics(people_count=2, density=10)),
@@ -168,12 +168,14 @@ def test_esp32_exit_preference_scenarios():
     dec_normal = engine.decide(zones_free, exits_free)
     assert dec_normal.action == "NORMAL"
     hw_normal = compute_hardware_state(dec_normal.action, dec_normal.recommended_exit_id)
-    assert hw_normal.display_message == "THANK YOU VISIT AGAIN"
+    assert dec_normal.route_state == "NEUTRAL"
+    assert hw_normal.display_message == "THANK YOU"
     assert hw_normal.audio == "NONE"
-    assert hw_normal.led_routes["exit_a"] == "NORMAL"
-    assert hw_normal.led_routes["exit_b"] == "NORMAL"
+    assert hw_normal.led_routes["exit_a"] == "NEUTRAL"
+    assert hw_normal.led_routes["exit_b"] == "NEUTRAL"
 
-    # 2. Exit A full / crowded -> Advise people to go to Exit B
+    engine.reset_state()
+    # 2. Exit A full / crowded -> REDIRECT_B
     zones_exit_a_full = [
         Zone(id="z_main", facility_id="f1", name="Main Area", risk=55, metrics=ZoneMetrics(people_count=18, density=50)),
         Zone(id="z_exit_a", facility_id="f1", name="Exit A Zone", risk=65, metrics=ZoneMetrics(people_count=16, density=65)),
@@ -185,14 +187,16 @@ def test_esp32_exit_preference_scenarios():
     ]
     dec_a_full = engine.decide(zones_exit_a_full, exits_a_full)
     assert dec_a_full.action == "REDIRECT_TO_EXIT"
+    assert dec_a_full.route_state == "REDIRECT_B"
     assert dec_a_full.recommended_exit_id == "exit_b"
     hw_a_full = compute_hardware_state(dec_a_full.action, dec_a_full.recommended_exit_id)
-    assert hw_a_full.display_message == "PLEASE USE EXIT B"
+    assert hw_a_full.display_message == "USE EXIT B"
     assert hw_a_full.audio == "PLEASE_USE_EXIT_B"
     assert hw_a_full.led_routes["exit_a"] == "RED_RESTRICTED"
     assert hw_a_full.led_routes["exit_b"] == "GREEN_GUIDANCE"
 
-    # 3. Exit B full / crowded -> Advise people to go to Exit A
+    engine.reset_state()
+    # 3. Exit B full / crowded -> REDIRECT_A
     zones_exit_b_full = [
         Zone(id="z_main", facility_id="f1", name="Main Area", risk=58, metrics=ZoneMetrics(people_count=19, density=55)),
         Zone(id="z_exit_a", facility_id="f1", name="Exit A Zone", risk=18, metrics=ZoneMetrics(people_count=4, density=18)),
@@ -204,14 +208,16 @@ def test_esp32_exit_preference_scenarios():
     ]
     dec_b_full = engine.decide(zones_exit_b_full, exits_b_full)
     assert dec_b_full.action == "REDIRECT_TO_EXIT"
+    assert dec_b_full.route_state == "REDIRECT_A"
     assert dec_b_full.recommended_exit_id == "exit_a"
     hw_b_full = compute_hardware_state(dec_b_full.action, dec_b_full.recommended_exit_id)
-    assert hw_b_full.display_message == "PLEASE USE EXIT A"
+    assert hw_b_full.display_message == "USE EXIT A"
     assert hw_b_full.audio == "PLEASE_USE_EXIT_A"
     assert hw_b_full.led_routes["exit_a"] == "GREEN_GUIDANCE"
     assert hw_b_full.led_routes["exit_b"] == "RED_RESTRICTED"
 
-    # 4. Both exits fully crowded -> CRITICAL -> Advise people to walk slowly
+    engine.reset_state()
+    # 4. Both exits fully crowded -> BOTH_BUSY -> advise people to walk slowly
     zones_both_full = [
         Zone(id="z_main", facility_id="f1", name="Main Area", risk=88, metrics=ZoneMetrics(people_count=35, density=88)),
         Zone(id="z_exit_a", facility_id="f1", name="Exit A Zone", risk=80, metrics=ZoneMetrics(people_count=20, density=80)),
@@ -223,10 +229,11 @@ def test_esp32_exit_preference_scenarios():
     ]
     dec_both = engine.decide(zones_both_full, exits_both_full)
     assert dec_both.action == "CRITICAL"
+    assert dec_both.route_state == "BOTH_BUSY"
     hw_both = compute_hardware_state(dec_both.action, dec_both.recommended_exit_id)
-    assert hw_both.display_message == "PLEASE WALK SLOWLY / MAINTAIN SPACE"
+    assert hw_both.display_message == "PLEASE WALK SLOWLY"
     assert hw_both.audio == "PLEASE_WALK_SLOWLY"
-    assert hw_both.arm_state == "SAFE_NEUTRAL"
+    assert hw_both.arm_state == "NEUTRAL"
     assert hw_both.led_routes["exit_a"] == "CAUTION"
     assert hw_both.led_routes["exit_b"] == "CAUTION"
 

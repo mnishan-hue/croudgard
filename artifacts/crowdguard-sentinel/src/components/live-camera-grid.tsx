@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ExternalLink, Radio, Users } from "lucide-react";
+import { Activity, ExternalLink, Radio } from "lucide-react";
 import { Link } from "wouter";
 import { CameraStream } from "@/components/camera-stream";
 import { useBrowserCameras } from "@/hooks/use-browser-cameras";
@@ -33,6 +33,7 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
           camera.zone_ids.includes(zone.id),
         );
         const primary = [...zones].sort((a, b) => b.risk - a.risk)[0];
+        const isMainArea = zones.some((zone) => zone.type === "MAIN_AREA");
         const live = reporting.has(camera.id);
         const videoLive = streaming.has(camera.id);
         const browserSource = Boolean(station.videos[camera.id]);
@@ -41,14 +42,6 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
         const isRunning = station.status === "RUNNING";
 
         const hasAnalyzedData = browserMetric && !browserMetric.isWarmingUp;
-
-        const peopleDisplay = hasAnalyzedData
-          ? browserMetric.peopleCount
-          : live && primary?.metrics.people_count !== undefined
-            ? primary.metrics.people_count
-            : isRunning
-              ? "Warming up"
-              : "—";
 
         const riskValue = hasAnalyzedData
           ? Math.round(browserMetric.riskScore)
@@ -61,15 +54,6 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
           : live
             ? (primary?.metrics.trend ?? "—")
             : "—";
-
-        const fpsValue =
-          hasAnalyzedData && browserMetric.fps > 0
-            ? `${browserMetric.fps.toFixed(1)} AI`
-            : live && primary?.metrics.fps
-              ? `${primary.metrics.fps.toFixed(1)} AI`
-              : isRunning
-                ? "Starting"
-                : "—";
 
         return (
           <Link
@@ -84,6 +68,13 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                   sourceVideo={station.videos[camera.id]}
                   stream={station.streams[camera.id]}
                   metric={browserMetric}
+                  overlayLabel={
+                    isMainArea
+                      ? snapshot.queue_level
+                        ? `QUEUE ${snapshot.queue_level} · WAIT ${snapshot.estimated_wait_label ?? "—"}`
+                        : "MAIN QUEUE ANALYZING"
+                      : "EXIT ANALYSIS ACTIVE"
+                  }
                 />
               ) : (
                 <CameraStream
@@ -100,11 +91,13 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
               {browserSource && (
                 <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex gap-1">
                   <span className="status-chip py-0.5 text-[8px] text-secondary">
-                    {recorded ? "RECORDED VIDEO" : "LIVE CAMERA"}
+                    SOURCE: {recorded ? "RECORDED VIDEO" : "LIVE CAMERA"}
                   </span>
                   <span className="status-chip py-0.5 text-[8px] text-secondary">
                     <span className="status-pulse h-1.5 w-1.5 rounded-full bg-secondary" />
-                    {hasAnalyzedData ? "ANALYSIS LIVE" : "AI WARMING UP"}
+                    {hasAnalyzedData
+                      ? "ANALYSIS: LIVE AI"
+                      : "ANALYSIS: WARMING UP"}
                   </span>
                 </div>
               )}
@@ -118,13 +111,15 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 data-mono text-[11px] font-semibold text-secondary">
-                  <Users size={13} />
-                  <span>{peopleDisplay}</span>
-                  {typeof peopleDisplay === "number" && (
-                    <span className="text-[9px] font-normal text-muted-foreground">
-                      people
-                    </span>
-                  )}
+                  <Activity size={13} />
+                  <span>
+                    {isMainArea
+                      ? (snapshot.queue_level ??
+                        (isRunning ? "Analyzing" : "—"))
+                      : live || hasAnalyzedData
+                        ? "Live"
+                        : "—"}
+                  </span>
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-4 gap-px bg-border">
@@ -142,11 +137,22 @@ export function LiveCameraGrid({ snapshot }: { snapshot: BackendSnapshot }) {
                   }
                 />
                 <Datum
-                  label="RISK"
-                  value={riskValue !== "—" ? `${riskValue}%` : "—"}
+                  label="LEVEL"
+                  value={
+                    riskValue !== "—" ? crowdLevel(Number(riskValue)) : "—"
+                  }
                 />
                 <Datum label="TREND" value={trendValue} />
-                <Datum label="FPS" value={fpsValue} />
+                <Datum
+                  label="ANALYSIS"
+                  value={
+                    hasAnalyzedData || live
+                      ? "LIVE AI"
+                      : isRunning
+                        ? "STARTING"
+                        : "—"
+                  }
+                />
               </div>
             </div>
           </Link>
@@ -166,11 +172,13 @@ function DirectCameraFeed({
   sourceVideo,
   stream,
   metric,
+  overlayLabel,
 }: {
   cameraName: string;
   sourceVideo: HTMLVideoElement;
   stream?: MediaStream;
   metric?: CameraAnalysisMetrics;
+  overlayLabel: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -276,7 +284,7 @@ function DirectCameraFeed({
       const height = boxHeight * scaleY;
       context.strokeRect(left, top, width, height);
 
-      const label = `PERSON ${Math.round(person.score * 100)}%`;
+      const label = `DETECTION ${Math.round(person.score * 100)}%`;
       const textWidth = context.measureText(label).width + 6;
       context.fillRect(left, Math.max(0, top - 15), textWidth, 15);
       context.fillStyle = "#2dd4bf";
@@ -285,10 +293,15 @@ function DirectCameraFeed({
     }
 
     context.fillStyle = "#071019e0";
-    context.fillRect(6, 6, 120, 20);
+    context.fillRect(
+      6,
+      6,
+      Math.min(260, context.measureText(overlayLabel).width + 14),
+      20,
+    );
     context.fillStyle = "#2dd4bf";
-    context.fillText(`LIVE AI · ${metric.peopleCount} PEOPLE`, 12, 20);
-  }, [metric, sourceVideo]);
+    context.fillText(overlayLabel, 12, 20);
+  }, [metric, overlayLabel, sourceVideo]);
 
   return (
     <div className="relative h-full w-full bg-[#071019]">
@@ -327,4 +340,11 @@ function stateForRisk(risk: number): string {
   if (risk >= 60) return "CONGESTED";
   if (risk >= 40) return "CONGESTION BUILDING";
   return "NORMAL";
+}
+
+function crowdLevel(risk: number): string {
+  if (risk >= 75) return "VERY HIGH";
+  if (risk >= 55) return "HIGH";
+  if (risk >= 35) return "MODERATE";
+  return "LOW";
 }
