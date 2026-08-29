@@ -32,7 +32,10 @@ const int SERVO_PIN = 13;
 const int SERVO_NEUTRAL_ANGLE = 90;
 const int SERVO_EXIT_A_ANGLE = 30;
 const int SERVO_EXIT_B_ANGLE = 150;
-const unsigned long SERVO_STEP_INTERVAL_MS = 18;
+// Set this to true only if the physical arrow points to the opposite exit.
+const bool SERVO_REVERSED = false;
+// One degree every 25 ms gives a controlled movement with no route-change snap.
+const unsigned long SERVO_STEP_INTERVAL_MS = 25;
 const int DFPLAYER_RX = 16;
 const int DFPLAYER_TX = 17;
 
@@ -215,6 +218,11 @@ void setServoTarget(int angle) {
   targetServoAngle = constrain(angle, SERVO_EXIT_A_ANGLE, SERVO_EXIT_B_ANGLE);
 }
 
+int servoAngleForExit(bool exitA) {
+  if (SERVO_REVERSED) exitA = !exitA;
+  return exitA ? SERVO_EXIT_A_ANGLE : SERVO_EXIT_B_ANGLE;
+}
+
 void updateServoMotion() {
   const unsigned long now = millis();
   if (currentServoAngle == targetServoAngle ||
@@ -298,7 +306,7 @@ void applyHardwareState(const String& state, String waitLabel = "",
     displayMessage = useExitA ? "USE EXIT A" : "USE EXIT B";
     exitAState = useExitA ? "GREEN_GUIDANCE" : "RED_RESTRICTED";
     exitBState = useExitA ? "RED_RESTRICTED" : "GREEN_GUIDANCE";
-    setServoTarget(useExitA ? SERVO_EXIT_A_ANGLE : SERVO_EXIT_B_ANGLE);
+    setServoTarget(servoAngleForExit(useExitA));
     showGuidanceScreen(state, estimatedWaitLabel, safestExitId);
     setRouteLeds(
         useExitA ? strip.Color(0, 255, 0) : strip.Color(255, 0, 0),
@@ -315,9 +323,9 @@ void applyHardwareState(const String& state, String waitLabel = "",
     exitAState = "CAUTION";
     exitBState = "CAUTION";
     if (recommendedExitId == "exit_a") {
-      setServoTarget(SERVO_EXIT_A_ANGLE);
+      setServoTarget(servoAngleForExit(true));
     } else if (recommendedExitId == "exit_b") {
-      setServoTarget(SERVO_EXIT_B_ANGLE);
+      setServoTarget(servoAngleForExit(false));
     } else {
       setServoTarget(SERVO_NEUTRAL_ANGLE);
     }
